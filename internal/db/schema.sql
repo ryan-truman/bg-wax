@@ -15,6 +15,7 @@ CREATE TABLE IF NOT EXISTS competitors (
     email             TEXT,
     ticket_tailor_id  TEXT,
     seed              INTEGER,
+    group_id          TEXT REFERENCES groups(id),
     created_at        DATETIME DEFAULT CURRENT_TIMESTAMP
 );
 
@@ -22,12 +23,6 @@ CREATE TABLE IF NOT EXISTS groups (
     id            TEXT PRIMARY KEY,
     tournament_id TEXT NOT NULL REFERENCES tournaments(id),
     name          TEXT NOT NULL  -- 'Group A', 'Group B', …
-);
-
-CREATE TABLE IF NOT EXISTS group_members (
-    group_id      TEXT NOT NULL REFERENCES groups(id),
-    competitor_id TEXT NOT NULL REFERENCES competitors(id),
-    PRIMARY KEY (group_id, competitor_id)
 );
 
 CREATE TABLE IF NOT EXISTS matches (
