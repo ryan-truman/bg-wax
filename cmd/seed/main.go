@@ -22,7 +22,11 @@ func main() {
 		os.Exit(1)
 	}
 
-	database, err := db.Open("backgammon.db")
+	dbPath := os.Getenv("DB_PATH")
+	if dbPath == "" {
+		dbPath = "backgammon.db"
+	}
+	database, err := db.Open(dbPath)
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -53,6 +57,8 @@ var mockNames = []string{
 	"Ugo Bianchi", "Vera Holloway", "Will Okonkwo", "Xena Papadopoulos",
 	"Yusuf Hassan", "Zoe Tremblay", "Aaron Philips", "Bea Lindqvist",
 	"Carlos Medina", "Dara Fitzpatrick", "Emeka Obi", "Fatima Al-Rashid",
+	"George Stavros", "Hannah Byrne", "Ibrahim Al-Sayed", "Jade Okafor",
+	"Kenji Watanabe", "Lucia Montoya", "Marco Russo", "Nadia Kowalski",
 }
 
 func seedMock(database *sql.DB) error {

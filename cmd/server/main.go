@@ -17,7 +17,11 @@ import (
 )
 
 func main() {
-	database, err := db.Open("backgammon.db")
+	dbPath := os.Getenv("DB_PATH")
+	if dbPath == "" {
+		dbPath = "backgammon.db"
+	}
+	database, err := db.Open(dbPath)
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -35,10 +39,8 @@ func main() {
 		}
 	}()
 
-	if runtime.GOOS == "darwin" {
-		time.Sleep(200 * time.Millisecond) // brief pause so the server is ready
-		exec.Command("open", "-a", "Safari", "http://localhost:8080").Start()
-	}
+	time.Sleep(200 * time.Millisecond)
+	openBrowser("http://localhost:8080")
 
 	quit := make(chan os.Signal, 1)
 	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
@@ -48,4 +50,25 @@ func main() {
 	defer cancel()
 	server.Shutdown(ctx)
 	log.Println("stopped")
+}
+
+func openBrowser(url string) {
+	appURL := "--app=" + url
+	switch runtime.GOOS {
+	case "darwin":
+		cmd := exec.Command("open", "-a", "Google Chrome", "--args", appURL)
+		if cmd.Start() != nil {
+			exec.Command("open", url).Start()
+		}
+	case "linux":
+		// Try chromium/chrome in app mode for the standalone PWA window.
+		// Fall back to xdg-open if neither is installed.
+		for _, bin := range []string{"chromium", "chromium-browser", "google-chrome", "google-chrome-stable"} {
+			if exec.Command("which", bin).Run() == nil {
+				exec.Command(bin, appURL).Start()
+				return
+			}
+		}
+		exec.Command("xdg-open", url).Start()
+	}
 }

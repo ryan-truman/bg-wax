@@ -20,11 +20,14 @@ export const api = {
   getMatches: () => request<Match[]>('/api/matches'),
   getBracket: () => request<Match[]>('/api/bracket'),
 
-  importFromTicketTailor: (eventName: string) =>
-    request<{ count: number }>('/api/tournament/import', {
+  importFromTicketTailor: (apiKey: string, eventName: string) =>
+    request<{ count: number; tournament: string }>('/api/tournament/import', {
       method: 'POST',
-      body: JSON.stringify({ event_name: eventName }),
+      body: JSON.stringify({ api_key: apiKey, event_name: eventName }),
     }),
+
+  clearTournament: () =>
+    request<void>('/api/tournament/clear', { method: 'POST' }),
 
   runDraw: () => request<void>('/api/tournament/draw', { method: 'POST' }),
 

@@ -29,6 +29,8 @@ func (s *Server) routes(frontend fs.FS) {
 	s.mux.HandleFunc("GET /health", s.handleHealth)
 
 	s.mux.HandleFunc("GET /api/tournament", s.handleGetTournament)
+	s.mux.HandleFunc("POST /api/tournament/import", s.handleImport)
+	s.mux.HandleFunc("POST /api/tournament/clear", s.handleClearTournament)
 
 	s.mux.HandleFunc("GET /api/competitors", s.handleListCompetitors)
 	s.mux.HandleFunc("POST /api/competitors", s.handleAddCompetitor)

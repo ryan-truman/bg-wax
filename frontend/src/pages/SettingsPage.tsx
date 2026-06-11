@@ -2,45 +2,73 @@ import { useState } from 'react'
 import { api } from '../api'
 import type { Tournament } from '../types'
 
+const LS_API_KEY = 'tt_api_key'
+const LS_EVENT_NAME = 'tt_event_name'
+
 interface Props {
   tournament: Tournament | null
-  onUpdate: (t: Tournament) => void
+  onUpdate: (t: Tournament | null) => void
 }
 
 export default function SettingsPage({ tournament, onUpdate }: Props) {
-  const [eventName, setEventName] = useState('')
+  const [apiKey, setApiKey] = useState(() => localStorage.getItem(LS_API_KEY) ?? '')
+  const [eventName, setEventName] = useState(() => localStorage.getItem(LS_EVENT_NAME) ?? '')
   const [importing, setImporting] = useState(false)
-  const [importMsg, setImportMsg] = useState<string | null>(null)
+  const [clearing, setClearing] = useState(false)
   const [drawing, setDrawing] = useState(false)
   const [advancing, setAdvancing] = useState(false)
-  const [error, setError] = useState<string | null>(null)
+  const [message, setMessage] = useState<{ text: string; ok: boolean } | null>(null)
 
-  async function handleImport() {
-    if (!eventName.trim()) return
+  function saveApiKey(val: string) {
+    setApiKey(val)
+    localStorage.setItem(LS_API_KEY, val)
+  }
+
+  function saveEventName(val: string) {
+    setEventName(val)
+    localStorage.setItem(LS_EVENT_NAME, val)
+  }
+
+  async function handleRefresh() {
+    if (!apiKey.trim() || !eventName.trim()) return
     setImporting(true)
-    setImportMsg(null)
-    setError(null)
+    setMessage(null)
     try {
-      const result = await api.importFromTicketTailor(eventName.trim())
-      setImportMsg(`Imported ${result.count} competitors.`)
+      const result = await api.importFromTicketTailor(apiKey.trim(), eventName.trim())
+      setMessage({ text: `Imported ${result.count} competitors from "${result.tournament}".`, ok: true })
       const t = await api.getTournament()
       onUpdate(t)
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'Import failed')
+      setMessage({ text: e instanceof Error ? e.message : 'Import failed', ok: false })
     } finally {
       setImporting(false)
     }
   }
 
+  async function handleClear() {
+    if (!confirm('This will delete all competitors, groups, and matches. Are you sure?')) return
+    setClearing(true)
+    setMessage(null)
+    try {
+      await api.clearTournament()
+      setMessage({ text: 'All data cleared.', ok: true })
+      onUpdate(null)
+    } catch (e) {
+      setMessage({ text: e instanceof Error ? e.message : 'Clear failed', ok: false })
+    } finally {
+      setClearing(false)
+    }
+  }
+
   async function handleDraw() {
     setDrawing(true)
-    setError(null)
+    setMessage(null)
     try {
       await api.runDraw()
       const t = await api.getTournament()
       onUpdate(t)
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'Draw failed')
+      setMessage({ text: e instanceof Error ? e.message : 'Draw failed', ok: false })
     } finally {
       setDrawing(false)
     }
@@ -48,13 +76,13 @@ export default function SettingsPage({ tournament, onUpdate }: Props) {
 
   async function handleAdvance() {
     setAdvancing(true)
-    setError(null)
+    setMessage(null)
     try {
       await api.advance()
       const t = await api.getTournament()
       onUpdate(t)
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'Advance failed')
+      setMessage({ text: e instanceof Error ? e.message : 'Advance failed', ok: false })
     } finally {
       setAdvancing(false)
     }
@@ -62,39 +90,70 @@ export default function SettingsPage({ tournament, onUpdate }: Props) {
 
   const canDraw = tournament?.status === 'setup'
   const canAdvance = tournament?.status === 'group_stage'
+  const canRefresh = !!apiKey.trim() && !!eventName.trim() && !importing
 
   return (
     <div className="max-w-lg space-y-10">
 
-      {error && (
-        <p className="text-sm rounded px-4 py-2 border" style={{ color: 'var(--color-wax-red)', backgroundColor: 'rgba(232,20,46,0.08)', borderColor: 'rgba(232,20,46,0.3)' }}>
-          {error}
+      {message && (
+        <p
+          className="text-sm rounded px-4 py-2 border"
+          style={message.ok
+            ? { color: 'var(--color-brand)', backgroundColor: 'rgba(61,122,94,0.1)', borderColor: 'rgba(61,122,94,0.3)' }
+            : { color: 'var(--color-wax-red)', backgroundColor: 'rgba(232,20,46,0.08)', borderColor: 'rgba(232,20,46,0.3)' }
+          }
+        >
+          {message.text}
         </p>
       )}
 
-      {/* Import */}
+      {/* Ticket Tailor */}
       <section className="space-y-4">
-        <h2 className="text-xs uppercase tracking-widest font-bold" style={{ color: '#888' }}>Import Competitors</h2>
-        <div className="flex gap-2">
+        <h2 className="text-xs uppercase tracking-widest font-bold" style={{ color: '#888' }}>Ticket Tailor</h2>
+
+        <div className="space-y-2">
+          <label className="text-xs uppercase tracking-widest" style={{ color: '#666' }}>API Key</label>
           <input
-            type="text"
-            placeholder="Ticket Tailor event name"
-            value={eventName}
-            onChange={e => setEventName(e.target.value)}
-            onKeyDown={e => e.key === 'Enter' && handleImport()}
-            className="flex-1 rounded px-3 py-2 text-sm focus:outline-none"
+            type="password"
+            placeholder="tt_live_…"
+            value={apiKey}
+            onChange={e => saveApiKey(e.target.value)}
+            className="w-full rounded px-3 py-2 text-sm focus:outline-none"
             style={{ backgroundColor: 'var(--color-surface-input)', border: '1px solid var(--color-border)', color: '#f0f0f0' }}
           />
+        </div>
+
+        <div className="space-y-2">
+          <label className="text-xs uppercase tracking-widest" style={{ color: '#666' }}>Event Name</label>
+          <input
+            type="text"
+            placeholder="Backgammon and Wax — Summer Open 2026"
+            value={eventName}
+            onChange={e => saveEventName(e.target.value)}
+            onKeyDown={e => e.key === 'Enter' && handleRefresh()}
+            className="w-full rounded px-3 py-2 text-sm focus:outline-none"
+            style={{ backgroundColor: 'var(--color-surface-input)', border: '1px solid var(--color-border)', color: '#f0f0f0' }}
+          />
+        </div>
+
+        <div className="flex gap-2">
           <button
-            onClick={handleImport}
-            disabled={importing || !eventName.trim()}
-            className="px-4 py-2 text-sm font-bold uppercase tracking-wide rounded transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+            onClick={handleRefresh}
+            disabled={!canRefresh}
+            className="flex-1 px-4 py-2 text-sm font-bold uppercase tracking-wide rounded transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
             style={{ backgroundColor: 'var(--color-brand)', color: '#fff' }}
           >
-            {importing ? 'Importing…' : 'Import'}
+            {importing ? 'Importing…' : 'Refresh Contestants'}
+          </button>
+          <button
+            onClick={handleClear}
+            disabled={clearing || !tournament}
+            className="px-4 py-2 text-sm font-bold uppercase tracking-wide rounded border transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+            style={{ borderColor: 'rgba(232,20,46,0.5)', color: 'var(--color-wax-red)' }}
+          >
+            {clearing ? 'Clearing…' : 'Clear'}
           </button>
         </div>
-        {importMsg && <p className="text-sm" style={{ color: 'var(--color-brand)' }}>{importMsg}</p>}
       </section>
 
       {/* Draw */}
@@ -121,8 +180,7 @@ export default function SettingsPage({ tournament, onUpdate }: Props) {
         <section className="space-y-4">
           <h2 className="text-xs uppercase tracking-widest font-bold" style={{ color: '#888' }}>Advance to Knockout</h2>
           <p className="text-sm" style={{ color: '#888' }}>
-            Complete all group matches before advancing. Top competitors from each group
-            will be seeded into the knockout bracket.
+            Top competitors from each group will be seeded into the knockout bracket.
           </p>
           <button
             onClick={handleAdvance}
@@ -134,14 +192,6 @@ export default function SettingsPage({ tournament, onUpdate }: Props) {
           </button>
         </section>
       )}
-
-      {/* Danger zone */}
-      <section className="space-y-4 pt-4 border-t" style={{ borderColor: 'var(--color-border)' }}>
-        <h2 className="text-xs uppercase tracking-widest font-bold" style={{ color: 'var(--color-wax-red)' }}>Danger Zone</h2>
-        <p className="text-sm" style={{ color: '#888' }}>
-          Re-importing from Ticket Tailor will wipe all existing data and start fresh.
-        </p>
-      </section>
 
     </div>
   )

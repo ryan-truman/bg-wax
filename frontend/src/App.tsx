@@ -7,6 +7,10 @@ import SettingsPage from './pages/SettingsPage'
 
 export default function App() {
   const [tournament, setTournament] = useState<Tournament | null>(null)
+
+  function handleTournamentUpdate(t: Tournament | null) {
+    setTournament(t)
+  }
   const { pathname } = useLocation()
 
   useEffect(() => {
@@ -65,8 +69,8 @@ export default function App() {
 
       <main className="px-6 py-8 max-w-7xl mx-auto">
         <Routes>
-          <Route path="/" element={<HomePage tournament={tournament} onUpdate={setTournament} />} />
-          <Route path="/settings" element={<SettingsPage tournament={tournament} onUpdate={setTournament} />} />
+          <Route path="/" element={<HomePage tournament={tournament} onUpdate={handleTournamentUpdate} />} />
+          <Route path="/settings" element={<SettingsPage tournament={tournament} onUpdate={handleTournamentUpdate} />} />
         </Routes>
       </main>
     </div>

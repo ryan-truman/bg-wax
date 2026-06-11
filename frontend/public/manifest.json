@@ -1,0 +1,17 @@
+{
+  "name": "Backgammon and Wax — Tournament",
+  "short_name": "BGwax",
+  "description": "Backgammon competition matchmaking and bracket management",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#242424",
+  "theme_color": "#3d7a5e",
+  "icons": [
+    {
+      "src": "/logo.png",
+      "sizes": "any",
+      "type": "image/png",
+      "purpose": "any maskable"
+    }
+  ]
+}
