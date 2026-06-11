@@ -33,9 +33,9 @@ export const api = {
 
   advance: () => request<void>('/api/tournament/advance', { method: 'POST' }),
 
-  updateMatch: (id: string, data: { player1_score: number; player2_score: number; winner_id: string }) =>
+  updateMatch: (id: string, winner_id: string) =>
     request<Match>(`/api/matches/${id}`, {
       method: 'PATCH',
-      body: JSON.stringify(data),
+      body: JSON.stringify({ winner_id }),
     }),
 }

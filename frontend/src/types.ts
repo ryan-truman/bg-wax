@@ -15,6 +15,8 @@ export interface Competitor {
   ticket_tailor_id: string | null
   seed: number | null
   group_id: string | null
+  wins: number
+  losses: number
 }
 
 export interface CompetitorStanding {

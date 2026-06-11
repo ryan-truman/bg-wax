@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react'
 import { Link } from 'react-router-dom'
 import { api } from '../api'
-import type { Tournament, Competitor, Group } from '../types'
+import type { Tournament, Group } from '../types'
 import GroupCard from '../components/GroupCard'
 import BracketView from '../components/BracketView'
 
@@ -11,7 +11,6 @@ interface Props {
 }
 
 export default function HomePage({ tournament }: Props) {
-  const [competitors, setCompetitors] = useState<Competitor[]>([])
   const [groups, setGroups] = useState<Group[]>([])
   const [loading, setLoading] = useState(true)
 
@@ -19,9 +18,7 @@ export default function HomePage({ tournament }: Props) {
     async function load() {
       try {
         if (!tournament) return
-        if (tournament.status === 'setup') {
-          setCompetitors(await api.getCompetitors())
-        } else if (tournament.status === 'group_stage') {
+        if (tournament.status === 'group_stage') {
           setGroups(await api.getGroups())
         }
       } finally {
@@ -49,38 +46,12 @@ export default function HomePage({ tournament }: Props) {
 
   if (tournament.status === 'setup') {
     return (
-      <div className="max-w-2xl">
-        <div className="flex items-center justify-between mb-6">
-          <h2 className="text-xs uppercase tracking-widest" style={{ color: '#777' }}>
-            Competitors — {competitors.length} registered
-          </h2>
-          <Link
-            to="/settings"
-            className="text-xs font-bold uppercase tracking-widest px-3 py-1.5 rounded transition-colors"
-            style={{ backgroundColor: 'var(--color-brand)', color: '#fff' }}
-          >
-            Run Draw →
-          </Link>
-        </div>
-        <div className="rounded border divide-y" style={{ borderColor: 'var(--color-border)', backgroundColor: 'var(--color-surface-card)' }}>
-          {competitors.length === 0 ? (
-            <p className="px-4 py-6 text-sm text-center" style={{ color: '#888' }}>
-              No competitors yet — import from Ticket Tailor in Settings.
-            </p>
-          ) : (
-            competitors.map((c, i) => (
-              <div key={c.id} className="flex items-center gap-4 px-4 py-2.5">
-                <span className="text-xs tabular-nums w-6 text-right shrink-0" style={{ color: '#555' }}>
-                  {i + 1}
-                </span>
-                <span className="text-sm flex-1">{c.name}</span>
-                {c.email && (
-                  <span className="text-xs hidden sm:block" style={{ color: '#666' }}>{c.email}</span>
-                )}
-              </div>
-            ))
-          )}
-        </div>
+      <div className="flex flex-col items-center justify-center py-32 gap-3 text-center">
+        <p className="text-2xl font-bold tracking-widest uppercase" style={{ color: '#444' }}>Setup</p>
+        <p className="text-sm" style={{ color: '#888' }}>Tournament not yet started. Run the draw to begin the group stage.</p>
+        <Link to="/settings" className="mt-2 text-sm transition-colors" style={{ color: 'var(--color-brand)' }}>
+          Go to Settings →
+        </Link>
       </div>
     )
   }

@@ -1,8 +1,10 @@
 import { useState, useEffect } from 'react'
-import { Routes, Route, Link, useLocation } from 'react-router-dom'
+import { Routes, Route, Link, NavLink, useLocation } from 'react-router-dom'
 import { api } from './api'
 import type { Tournament } from './types'
 import HomePage from './pages/HomePage'
+import MatchHistoryPage from './pages/MatchHistoryPage'
+import CompetitorsPage from './pages/CompetitorsPage'
 import SettingsPage from './pages/SettingsPage'
 
 export default function App() {
@@ -17,20 +19,12 @@ export default function App() {
     api.getTournament().then(setTournament).catch(() => {})
   }, [])
 
-  const statusLabel: Record<string, string> = {
-    setup: 'Setup',
-    group_stage: 'Group Stage',
-    knockout: 'Knockout',
-    complete: 'Complete',
-  }
-
   const onSettings = pathname === '/settings'
 
   return (
     <div className="min-h-screen text-white" style={{ backgroundColor: 'var(--color-surface-base)' }}>
       <header className="px-6 py-4 border-b" style={{ backgroundColor: '#2a2a2a', borderColor: 'var(--color-border)' }}>
         <div className="max-w-7xl mx-auto flex items-center justify-between">
-          {/* Logo + title — clicking returns to tournament */}
           <Link to="/" className="flex items-center gap-4 no-underline">
             <img src="/logo.png" alt="" className="w-10 h-10 shrink-0" />
             <div>
@@ -43,16 +37,7 @@ export default function App() {
             </div>
           </Link>
 
-          {/* Right side: status badge + settings button */}
           <div className="flex items-center gap-4">
-            {tournament && (
-              <span
-                className="text-xs uppercase tracking-widest px-2 py-1 rounded border"
-                style={{ color: 'var(--color-brand)', borderColor: 'var(--color-brand)', opacity: 0.8 }}
-              >
-                {statusLabel[tournament.status] ?? tournament.status}
-              </span>
-            )}
             <Link
               to={onSettings ? '/' : '/settings'}
               className="text-xs font-bold uppercase tracking-widest px-3 py-1.5 rounded border transition-colors"
@@ -65,11 +50,43 @@ export default function App() {
             </Link>
           </div>
         </div>
+
+        {!onSettings && (
+          <div className="max-w-7xl mx-auto mt-4 flex">
+            {[
+              { to: '/', label: 'Tournament' },
+              { to: '/matches', label: 'Match History' },
+              { to: '/competitors', label: 'Competitors' },
+            ].map(({ to, label }) => (
+              <NavLink
+                key={to}
+                to={to}
+                end
+                className={({ isActive }) =>
+                  `flex-1 text-center text-xs font-bold uppercase tracking-widest px-3 py-1.5 rounded transition-colors ${
+                    isActive
+                      ? 'text-white'
+                      : 'text-gray-500 hover:text-gray-300'
+                  }`
+                }
+                style={({ isActive }) =>
+                  isActive
+                    ? { backgroundColor: 'var(--color-border)', color: '#fff' }
+                    : {}
+                }
+              >
+                {label}
+              </NavLink>
+            ))}
+          </div>
+        )}
       </header>
 
       <main className="px-6 py-8 max-w-7xl mx-auto">
         <Routes>
           <Route path="/" element={<HomePage tournament={tournament} onUpdate={handleTournamentUpdate} />} />
+          <Route path="/matches" element={<MatchHistoryPage />} />
+          <Route path="/competitors" element={<CompetitorsPage />} />
           <Route path="/settings" element={<SettingsPage tournament={tournament} onUpdate={handleTournamentUpdate} />} />
         </Routes>
       </main>

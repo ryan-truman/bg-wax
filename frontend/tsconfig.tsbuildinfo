@@ -1,1 +1,1 @@
-{"root":["./src/App.tsx","./src/api.ts","./src/main.tsx","./src/types.ts","./src/components/BracketView.tsx","./src/components/GroupCard.tsx","./src/pages/HomePage.tsx","./src/pages/SettingsPage.tsx"],"version":"5.9.3"}
+{"root":["./src/App.tsx","./src/api.ts","./src/main.tsx","./src/types.ts","./src/components/BracketView.tsx","./src/components/GroupCard.tsx","./src/pages/CompetitorsPage.tsx","./src/pages/HomePage.tsx","./src/pages/MatchHistoryPage.tsx","./src/pages/SettingsPage.tsx"],"version":"5.9.3"}
