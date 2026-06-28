@@ -16,6 +16,7 @@ CREATE TABLE IF NOT EXISTS competitors (
     ticket_tailor_id  TEXT,
     seed              INTEGER,
     group_id          TEXT REFERENCES groups(id),
+    removed           INTEGER NOT NULL DEFAULT 0,
     created_at        DATETIME DEFAULT CURRENT_TIMESTAMP
 );
 

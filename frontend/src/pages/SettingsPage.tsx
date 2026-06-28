@@ -1,4 +1,5 @@
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
+import { useNavigate } from 'react-router-dom'
 import { api } from '../api'
 import type { Tournament } from '../types'
 
@@ -11,11 +12,22 @@ interface Props {
 }
 
 export default function SettingsPage({ tournament, onUpdate }: Props) {
+  const navigate = useNavigate()
+
+  useEffect(() => {
+    function onKey(e: KeyboardEvent) {
+      if (e.key === 'Escape') navigate('/')
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [navigate])
+
   const [apiKey, setApiKey] = useState(() => localStorage.getItem(LS_API_KEY) ?? '')
   const [eventName, setEventName] = useState(() => localStorage.getItem(LS_EVENT_NAME) ?? '')
   const [importing, setImporting] = useState(false)
   const [clearing, setClearing] = useState(false)
   const [drawing, setDrawing] = useState(false)
+  const [numGroups, setNumGroups] = useState(8)
   const [advancing, setAdvancing] = useState(false)
   const [message, setMessage] = useState<{ text: string; ok: boolean } | null>(null)
 
@@ -64,7 +76,7 @@ export default function SettingsPage({ tournament, onUpdate }: Props) {
     setDrawing(true)
     setMessage(null)
     try {
-      await api.runDraw()
+      await api.runDraw(numGroups)
       const t = await api.getTournament()
       onUpdate(t)
     } catch (e) {
@@ -156,24 +168,42 @@ export default function SettingsPage({ tournament, onUpdate }: Props) {
         </div>
       </section>
 
-      {/* Draw */}
-      <section className="space-y-4">
-        <h2 className="text-xs uppercase tracking-widest font-bold" style={{ color: '#888' }}>Group Draw</h2>
-        <p className="text-sm" style={{ color: '#888' }}>
-          Randomly assigns competitors to groups and generates all round-robin matches.
-        </p>
-        <button
-          onClick={handleDraw}
-          disabled={drawing || !canDraw}
-          className="px-4 py-2 text-sm font-bold uppercase tracking-wide rounded border transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
-          style={{ borderColor: 'var(--color-border)', color: '#f0f0f0' }}
-        >
-          {drawing ? 'Running draw…' : 'Run Draw'}
-        </button>
-        {!canDraw && tournament && (
-          <p className="text-xs" style={{ color: '#666' }}>Draw has already been run.</p>
-        )}
-      </section>
+      {/* Draw — only available before the draw has been run */}
+      {canDraw && (
+        <section className="space-y-4">
+          <h2 className="text-xs uppercase tracking-widest font-bold" style={{ color: '#888' }}>Group Draw</h2>
+          <p className="text-sm" style={{ color: '#888' }}>
+            Randomly assigns competitors to groups and generates all round-robin matches.
+          </p>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={() => setNumGroups(n => Math.max(2, n - 1))}
+              disabled={drawing || numGroups <= 2}
+              className="w-8 h-8 flex items-center justify-center rounded border text-sm font-bold transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+              style={{ borderColor: 'var(--color-border)', color: '#f0f0f0' }}
+            >
+              −
+            </button>
+            <span className="w-6 text-center text-sm tabular-nums" style={{ color: '#f0f0f0' }}>{numGroups}</span>
+            <button
+              onClick={() => setNumGroups(n => Math.min(26, n + 1))}
+              disabled={drawing || numGroups >= 26}
+              className="w-8 h-8 flex items-center justify-center rounded border text-sm font-bold transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+              style={{ borderColor: 'var(--color-border)', color: '#f0f0f0' }}
+            >
+              +
+            </button>
+            <button
+              onClick={handleDraw}
+              disabled={drawing}
+              className="px-4 py-2 text-sm font-bold uppercase tracking-wide rounded border transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+              style={{ borderColor: 'var(--color-border)', color: '#f0f0f0' }}
+            >
+              {drawing ? 'Running draw…' : 'Run Draw'}
+            </button>
+          </div>
+        </section>
+      )}
 
       {/* Advance */}
       {canAdvance && (

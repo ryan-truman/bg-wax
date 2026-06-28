@@ -2,8 +2,9 @@ set dotenv-load
 
 # Seed 40 fake competitors and start the server using an isolated demo database
 demo:
+    cd frontend && npm run build
     DB_PATH=demo.db go run ./cmd/seed --mock
-    DB_PATH=demo.db go run ./cmd/server
+    DB_PATH=demo.db FRONTEND_DIR=internal/web/dist go run ./cmd/server
 
 # Start the server using the real database (competitors imported via Settings page)
 serve:

@@ -71,7 +71,7 @@ function MatchRow({ name, score, winner }: { name: string | null; score: number 
   )
 }
 
-function roundLabel(round: number | null): string {
+export function roundLabel(round: number | null): string {
   if (round === null) return ''
   if (round === 1) return 'Final'
   if (round === 2) return 'Semi-finals'

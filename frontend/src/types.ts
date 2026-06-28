@@ -49,6 +49,15 @@ export interface Competitor {
   group_id: string | null;
   wins: number /* int */;
   losses: number /* int */;
+  points: number /* int */;
+}
+/**
+ * RemovedCompetitor is a competitor who has been removed from the tournament;
+ * they can be restored from the competitors page.
+ */
+export interface RemovedCompetitor {
+  id: string;
+  name: string;
 }
 /**
  * CompetitorStanding is one row of a group's standings table.

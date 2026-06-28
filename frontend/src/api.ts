@@ -1,4 +1,4 @@
-import type { Tournament, Competitor, Group, Match } from './types'
+import type { Tournament, Competitor, RemovedCompetitor, Group, Match } from './types'
 
 async function request<T>(path: string, options?: RequestInit): Promise<T> {
   const res = await fetch(path, {
@@ -16,6 +16,9 @@ async function request<T>(path: string, options?: RequestInit): Promise<T> {
 export const api = {
   getTournament: () => request<Tournament>('/api/tournament'),
   getCompetitors: () => request<Competitor[]>('/api/competitors'),
+  getRemovedCompetitors: () => request<RemovedCompetitor[]>('/api/competitors/removed'),
+  restoreCompetitor: (id: string) =>
+    request<void>(`/api/competitors/${id}/restore`, { method: 'POST' }),
   getGroups: () => request<Group[]>('/api/groups'),
   getMatches: () => request<Match[]>('/api/matches'),
   getBracket: () => request<Match[]>('/api/bracket'),
@@ -29,13 +32,20 @@ export const api = {
   clearTournament: () =>
     request<void>('/api/tournament/clear', { method: 'POST' }),
 
-  runDraw: () => request<void>('/api/tournament/draw', { method: 'POST' }),
+  runDraw: (numGroups: number) =>
+    request<void>('/api/tournament/draw', {
+      method: 'POST',
+      body: JSON.stringify({ num_groups: numGroups }),
+    }),
+
+  deleteCompetitor: (id: string) =>
+    request<void>(`/api/competitors/${id}`, { method: 'DELETE' }),
 
   advance: () => request<void>('/api/tournament/advance', { method: 'POST' }),
 
-  updateMatch: (id: string, winner_id: string) =>
+  updateMatch: (id: string, winner_id: string, points: number) =>
     request<Match>(`/api/matches/${id}`, {
       method: 'PATCH',
-      body: JSON.stringify({ winner_id }),
+      body: JSON.stringify({ winner_id, points }),
     }),
 }

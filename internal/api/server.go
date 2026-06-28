@@ -33,8 +33,10 @@ func (s *Server) routes(frontend fs.FS) {
 	s.mux.HandleFunc("POST /api/tournament/clear", s.handleClearTournament)
 
 	s.mux.HandleFunc("GET /api/competitors", s.handleListCompetitors)
+	s.mux.HandleFunc("GET /api/competitors/removed", s.handleListRemovedCompetitors)
 	s.mux.HandleFunc("POST /api/competitors", s.handleAddCompetitor)
 	s.mux.HandleFunc("DELETE /api/competitors/{id}", s.handleDeleteCompetitor)
+	s.mux.HandleFunc("POST /api/competitors/{id}/restore", s.handleRestoreCompetitor)
 
 	s.mux.HandleFunc("GET /api/groups", s.handleListGroups)
 

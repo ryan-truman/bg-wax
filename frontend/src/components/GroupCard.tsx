@@ -23,7 +23,7 @@ export default function GroupCard({ group }: Props) {
         </thead>
         <tbody>
           {sorted.map((c, i) => (
-            <tr key={c.id} className="border-t" style={{ borderColor: 'var(--color-border-subtle)', color: i === 0 ? 'var(--color-brand)' : '#f0f0f0' }}>
+            <tr key={c.id} className="border-t" style={{ borderColor: 'var(--color-border-subtle)', color: i === 0 ? 'var(--color-brand)' : i === 1 ? 'var(--color-wax-red)' : '#f0f0f0' }}>
               <td className="py-1.5 pr-2 truncate max-w-[120px]">{c.name}</td>
               <td className="py-1.5 text-right tabular-nums">{c.won}</td>
               <td className="py-1.5 text-right tabular-nums" style={{ color: '#888' }}>{c.lost}</td>

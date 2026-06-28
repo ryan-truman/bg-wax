@@ -54,6 +54,14 @@ type Competitor struct {
 	GroupID        *string `json:"group_id"`
 	Wins           int     `json:"wins"`
 	Losses         int     `json:"losses"`
+	Points         int     `json:"points"`
+}
+
+// RemovedCompetitor is a competitor who has been removed from the tournament;
+// they can be restored from the competitors page.
+type RemovedCompetitor struct {
+	ID   string `json:"id"`
+	Name string `json:"name"`
 }
 
 // CompetitorStanding is one row of a group's standings table.

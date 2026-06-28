@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"io/fs"
 	"log"
 	"net/http"
 	"os"
@@ -27,9 +28,16 @@ func main() {
 	}
 	defer database.Close()
 
+	var frontendFS fs.FS
+	if dir := os.Getenv("FRONTEND_DIR"); dir != "" {
+		frontendFS = os.DirFS(dir)
+	} else {
+		frontendFS = web.FS
+	}
+
 	server := &http.Server{
 		Addr:    ":8080",
-		Handler: api.NewServer(database, web.FS),
+		Handler: api.NewServer(database, frontendFS),
 	}
 
 	go func() {

@@ -1,40 +1,103 @@
 import { useState, useEffect } from 'react'
 import { api } from '../api'
 import type { Match } from '../types'
+import { roundLabel } from '../components/BracketView'
 
 export default function MatchHistoryPage() {
   const [matches, setMatches] = useState<Match[]>([])
   const [loading, setLoading] = useState(true)
 
   useEffect(() => {
-    api.getMatches()
-      .then(setMatches)
-      .catch(() => {})
-      .finally(() => setLoading(false))
+    let active = true
+    const load = () =>
+      api.getMatches()
+        .then(m => { if (active) setMatches(m) })
+        .catch(() => {})
+
+    load().finally(() => { if (active) setLoading(false) })
+
+    // Poll so newly-revealed matchups (e.g. the next knockout round, or results
+    // entered on another device) appear without a manual refresh.
+    const timer = setInterval(load, 5000)
+    return () => { active = false; clearInterval(timer) }
   }, [])
 
   function handleUpdate(updated: Match) {
+    // Flip the just-recorded match immediately for snappy feedback…
     setMatches(prev => prev.map(m => m.id === updated.id ? updated : m))
+    // …then refetch, since recording a result can reveal the next match.
+    api.getMatches().then(setMatches).catch(() => {})
   }
 
   if (loading) return <p className="text-sm" style={{ color: '#888' }}>Loading…</p>
-
-  const inProgress = matches.filter(m => m.status === 'in_progress')
-  const upcoming = matches.filter(m => m.status === 'pending')
-  const completed = matches.filter(m => m.status === 'complete')
 
   if (!matches.length) {
     return <p className="text-sm" style={{ color: '#888' }}>No matches yet.</p>
   }
 
+  const knockout = matches.filter(m => m.stage === 'knockout')
+  const group = matches.filter(m => m.stage === 'group')
+
   return (
-    <div className="max-w-2xl space-y-8">
+    <div className="max-w-2xl space-y-12">
+      {knockout.length > 0 && (
+        <KnockoutRounds matches={knockout} onUpdate={handleUpdate} />
+      )}
+      {group.length > 0 && (
+        <StageGroup label={knockout.length > 0 ? 'Group Stage' : null} matches={group} onUpdate={handleUpdate} />
+      )}
+    </div>
+  )
+}
+
+function StageHeader({ label }: { label: string }) {
+  return (
+    <h2 className="text-sm uppercase tracking-widest font-black pb-2 border-b" style={{ color: 'var(--color-brand)', borderColor: 'var(--color-border)' }}>
+      {label}
+    </h2>
+  )
+}
+
+function KnockoutRounds({ matches, onUpdate }: { matches: Match[]; onUpdate: (m: Match) => void }) {
+  // Latest round first: the final (round 1) is the furthest-progressed, so
+  // sort ascending by round number — whatever round is currently live sits on top.
+  const rounds = [...new Set(matches.map(m => m.round))].sort((a, b) => (a ?? 0) - (b ?? 0))
+
+  return (
+    <div className="space-y-8">
+      <StageHeader label="Knockout" />
+      {rounds.map(round => {
+        const roundMatches = matches
+          .filter(m => m.round === round)
+          .sort((a, b) => (a.position ?? 0) - (b.position ?? 0))
+        return (
+          <MatchSection
+            key={round ?? 'x'}
+            title={roundLabel(round)}
+            count={roundMatches.length}
+            matches={roundMatches}
+            onUpdate={onUpdate}
+          />
+        )
+      })}
+    </div>
+  )
+}
+
+function StageGroup({ label, matches, onUpdate }: { label: string | null; matches: Match[]; onUpdate: (m: Match) => void }) {
+  const inProgress = matches.filter(m => m.status === 'in_progress')
+  const upcoming = matches.filter(m => m.status === 'pending')
+  const completed = matches.filter(m => m.status === 'complete')
+
+  return (
+    <div className="space-y-8">
+      {label && <StageHeader label={label} />}
       {inProgress.length > 0 && (
         <MatchSection
           title="In Progress"
           count={inProgress.length}
           matches={inProgress}
-          onUpdate={handleUpdate}
+          onUpdate={onUpdate}
           accentColor="var(--color-brand)"
         />
       )}
@@ -43,7 +106,7 @@ export default function MatchHistoryPage() {
           title="Upcoming"
           count={upcoming.length}
           matches={upcoming}
-          onUpdate={handleUpdate}
+          onUpdate={onUpdate}
         />
       )}
       {completed.length > 0 && (
@@ -51,7 +114,7 @@ export default function MatchHistoryPage() {
           title="Completed"
           count={completed.length}
           matches={completed}
-          onUpdate={handleUpdate}
+          onUpdate={onUpdate}
         />
       )}
     </div>
@@ -96,18 +159,21 @@ function MatchSection({
 
 function MatchRow({ match, onUpdate }: { match: Match; onUpdate: (m: Match) => void }) {
   const [recording, setRecording] = useState(false)
-  const [saving, setSaving] = useState<string | null>(null) // holds the winner_id being saved
+  const [saving, setSaving] = useState(false)
 
   const p1Won = match.winner_id === match.player1_id
   const p2Won = match.winner_id === match.player2_id
+  const winnerPoints = p1Won ? match.player1_score : p2Won ? match.player2_score : null
 
-  async function handleWinner(winnerID: string) {
-    setSaving(winnerID)
+  async function handleResult(winnerID: string, points: number) {
+    setSaving(true)
     try {
-      const updated = await api.updateMatch(match.id, winnerID)
+      const updated = await api.updateMatch(match.id, winnerID, points)
+      setRecording(false)
+      setSaving(false)
       onUpdate(updated)
     } catch {
-      setSaving(null)
+      setSaving(false)
     }
   }
 
@@ -117,37 +183,45 @@ function MatchRow({ match, onUpdate }: { match: Match; onUpdate: (m: Match) => v
     </span>
   )
 
-  if (recording) {
+  if (recording && match.status !== 'complete') {
     return (
-      <div className="px-4 py-3 space-y-2">
-        <p className="text-xs uppercase tracking-widest" style={{ color: '#666' }}>Who won?</p>
+      <div className="px-4 py-3 space-y-3">
         <div className="flex items-center gap-2">
           {stageBadge}
-          <button
-            onClick={() => handleWinner(match.player1_id!)}
-            disabled={!!saving}
-            className="flex-1 text-sm font-semibold px-3 py-2 rounded border transition-colors disabled:opacity-40 truncate"
-            style={{ borderColor: 'var(--color-brand)', color: 'var(--color-brand)' }}
-          >
-            {saving === match.player1_id ? 'Saving…' : (match.player1_name ?? 'TBD')}
-          </button>
-          <span className="text-xs shrink-0" style={{ color: '#555' }}>vs</span>
-          <button
-            onClick={() => handleWinner(match.player2_id!)}
-            disabled={!!saving}
-            className="flex-1 text-sm font-semibold px-3 py-2 rounded border transition-colors disabled:opacity-40 truncate"
-            style={{ borderColor: 'var(--color-brand)', color: 'var(--color-brand)' }}
-          >
-            {saving === match.player2_id ? 'Saving…' : (match.player2_name ?? 'TBD')}
-          </button>
+          <p className="text-xs uppercase tracking-widest" style={{ color: '#666' }}>Who won?</p>
           <button
             onClick={() => setRecording(false)}
-            disabled={!!saving}
-            className="text-xs px-2 py-1 rounded shrink-0"
+            disabled={saving}
+            className="ml-auto text-xs px-2 py-1 rounded"
             style={{ color: '#666' }}
           >
             ✕
           </button>
+        </div>
+        <div className="grid grid-cols-2 gap-3">
+          {([
+            [match.player1_id!, match.player1_name],
+            [match.player2_id!, match.player2_name],
+          ] as [string, string | null][]).map(([pid, name], col) => (
+            <div key={pid} className="space-y-1.5">
+              <p className="text-xs truncate font-semibold" style={{ color: '#f0f0f0' }}>{name ?? 'TBD'}</p>
+              <div className="flex gap-1">
+                {(col === 0 ? [3, 2, 1] : [1, 2, 3]).map(pts => (
+                  <button
+                    key={pts}
+                    onClick={() => handleResult(pid, pts)}
+                    disabled={saving}
+                    className="flex-1 text-sm font-bold py-1.5 rounded border transition-colors disabled:opacity-40"
+                    style={col === 0
+                      ? { borderColor: 'var(--color-wax-red)', color: 'var(--color-wax-red)' }
+                      : { borderColor: 'var(--color-brand)', color: 'var(--color-brand)' }}
+                  >
+                    +{pts}
+                  </button>
+                ))}
+              </div>
+            </div>
+          ))}
         </div>
       </div>
     )
@@ -167,6 +241,9 @@ function MatchRow({ match, onUpdate }: { match: Match; onUpdate: (m: Match) => v
           {match.player2_name ?? 'TBD'}
         </span>
       </div>
+      {match.status === 'complete' && winnerPoints !== null && (
+        <span className="text-xs tabular-nums shrink-0" style={{ color: '#666' }}>+{winnerPoints}</span>
+      )}
       {match.status !== 'complete' && (
         <button
           onClick={() => setRecording(true)}
