@@ -9,8 +9,13 @@ demo:
 serve:
     go run ./cmd/server
 
+# Regenerate frontend/src/types.ts from the Go API structs in internal/api.
+# Run this after changing any response type so the TypeScript stays in sync.
+types:
+    go run github.com/gzuidhof/tygo@v0.2.21 generate
+
 # Build and package macOS binaries for distribution
-release:
+release: types
     cd frontend && npm run build
     GOOS=darwin GOARCH=amd64 go build -o dist/backgammon-amd64 ./cmd/server
     GOOS=darwin GOARCH=arm64 go build -o dist/backgammon-arm64 ./cmd/server

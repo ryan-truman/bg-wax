@@ -1,0 +1,13 @@
+packages:
+  - path: backgammon/internal/api
+    output_path: frontend/src/types.ts
+    # server.go's Server struct is internal plumbing, not an API shape.
+    exclude_files:
+      - server.go
+      - handlers.go
+    # The API marshals nil pointers as JSON null (no omitempty), so optional
+    # fields must be `T | null`, not `T | undefined`.
+    optional_type: "null"
+    # Render the TournamentStatus / MatchStatus const blocks as string-literal
+    # unions rather than loose `const` declarations.
+    enum_style: union

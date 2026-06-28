@@ -1,0 +1,20 @@
+# Dependencies
+/frontend/node_modules/
+
+# Build output
+/server
+/dist/
+/frontend/tsconfig.tsbuildinfo
+# Note: internal/web/dist/ is intentionally tracked — it is go:embed'd
+# into the server binary, so a fresh clone needs it to `go build`.
+
+# Local databases (SQLite + WAL sidecar files)
+*.db
+*.db-wal
+*.db-shm
+
+# Environment
+.env
+
+# OS noise
+.DS_Store

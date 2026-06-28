@@ -38,14 +38,8 @@ func (s *Server) handleGetTournament(w http.ResponseWriter, r *http.Request) {
 		LIMIT 1
 	`)
 
-	var t struct {
-		ID         string `json:"id"`
-		Name       string `json:"name"`
-		Status     string `json:"status"`
-		ConfigJSON string `json:"config"`
-		CreatedAt  string `json:"created_at"`
-	}
-	if err := row.Scan(&t.ID, &t.Name, &t.Status, &t.ConfigJSON, &t.CreatedAt); err != nil {
+	var t Tournament
+	if err := row.Scan(&t.ID, &t.Name, &t.Status, &t.Config, &t.CreatedAt); err != nil {
 		writeError(w, http.StatusNotFound, "no tournament found")
 		return
 	}
@@ -73,17 +67,6 @@ func (s *Server) handleListCompetitors(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer rows.Close()
-
-	type Competitor struct {
-		ID             string  `json:"id"`
-		Name           string  `json:"name"`
-		Email          *string `json:"email"`
-		TicketTailorID *string `json:"ticket_tailor_id"`
-		Seed           *int    `json:"seed"`
-		GroupID        *string `json:"group_id"`
-		Wins           int     `json:"wins"`
-		Losses         int     `json:"losses"`
-	}
 
 	competitors := []Competitor{}
 	for rows.Next() {
@@ -197,20 +180,6 @@ func (s *Server) handleListGroups(w http.ResponseWriter, r *http.Request) {
 	}
 	defer groupRows.Close()
 
-	type CompetitorStanding struct {
-		ID     string `json:"id"`
-		Name   string `json:"name"`
-		Played int    `json:"played"`
-		Won    int    `json:"won"`
-		Lost   int    `json:"lost"`
-		Points int    `json:"points"`
-	}
-	type Group struct {
-		ID          string               `json:"id"`
-		Name        string               `json:"name"`
-		Competitors []CompetitorStanding `json:"competitors"`
-	}
-
 	var groups []Group
 	for groupRows.Next() {
 		var g Group
@@ -315,22 +284,6 @@ func (s *Server) handleListMatches(w http.ResponseWriter, r *http.Request) {
 	}
 	defer rows.Close()
 
-	type Match struct {
-		ID           string  `json:"id"`
-		Stage        string  `json:"stage"`
-		GroupID      *string `json:"group_id"`
-		Round        *int    `json:"round"`
-		Position     *int    `json:"position"`
-		Player1ID    *string `json:"player1_id"`
-		Player1Name  *string `json:"player1_name"`
-		Player2ID    *string `json:"player2_id"`
-		Player2Name  *string `json:"player2_name"`
-		WinnerID     *string `json:"winner_id"`
-		Player1Score *int    `json:"player1_score"`
-		Player2Score *int    `json:"player2_score"`
-		Status       string  `json:"status"`
-	}
-
 	matches := []Match{}
 	for rows.Next() {
 		var m Match
@@ -380,21 +333,6 @@ func (s *Server) handleUpdateMatch(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Return the updated match with player names.
-	type Match struct {
-		ID           string  `json:"id"`
-		Stage        string  `json:"stage"`
-		GroupID      *string `json:"group_id"`
-		Round        *int    `json:"round"`
-		Position     *int    `json:"position"`
-		Player1ID    *string `json:"player1_id"`
-		Player1Name  *string `json:"player1_name"`
-		Player2ID    *string `json:"player2_id"`
-		Player2Name  *string `json:"player2_name"`
-		WinnerID     *string `json:"winner_id"`
-		Player1Score *int    `json:"player1_score"`
-		Player2Score *int    `json:"player2_score"`
-		Status       string  `json:"status"`
-	}
 	var m Match
 	if err := s.db.QueryRowContext(ctx, `
 		SELECT
