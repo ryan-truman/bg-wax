@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"crypto/rand"
+	"database/sql"
 	"encoding/json"
 	"fmt"
 	mathrand "math/rand"
@@ -22,6 +23,21 @@ func writeJSON(w http.ResponseWriter, status int, v any) {
 
 func writeError(w http.ResponseWriter, status int, msg string) {
 	writeJSON(w, status, map[string]string{"error": msg})
+}
+
+// withTx runs fn inside a transaction, committing if it returns nil and rolling
+// back on any error or panic. Use it for handlers that issue several writes that
+// must all land together (a draw, an advance, an import).
+func (s *Server) withTx(ctx context.Context, fn func(*sql.Tx) error) error {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback() // no-op once Commit succeeds
+	if err := fn(tx); err != nil {
+		return err
+	}
+	return tx.Commit()
 }
 
 // --- health ------------------------------------------------------------------
@@ -111,30 +127,33 @@ func (s *Server) handleImport(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	for _, table := range []string{"matches", "competitors", "groups", "tournaments"} {
-		if _, err := s.db.ExecContext(r.Context(), "DELETE FROM "+table); err != nil {
-			writeError(w, http.StatusInternalServerError, "clear failed: "+err.Error())
-			return
-		}
-	}
-
+	// Replace the existing tournament wholesale. Wrapped in a transaction so a
+	// mid-import failure can't leave the tables half-cleared or half-populated.
 	tournamentID := newID()
-	if _, err := s.db.ExecContext(r.Context(),
-		`INSERT INTO tournaments (id, name, status) VALUES (?, ?, 'setup')`,
-		tournamentID, event.Name,
-	); err != nil {
-		writeError(w, http.StatusInternalServerError, "create tournament failed: "+err.Error())
-		return
-	}
-
-	for _, t := range tickets {
-		if _, err := s.db.ExecContext(r.Context(),
-			`INSERT INTO competitors (id, tournament_id, name, email, ticket_tailor_id) VALUES (?, ?, ?, ?, ?)`,
-			newID(), tournamentID, t.FullName(), t.Email, t.ID,
-		); err != nil {
-			writeError(w, http.StatusInternalServerError, "insert competitor failed: "+err.Error())
-			return
+	if err := s.withTx(r.Context(), func(tx *sql.Tx) error {
+		for _, table := range []string{"matches", "competitors", "groups", "tournaments"} {
+			if _, err := tx.ExecContext(r.Context(), "DELETE FROM "+table); err != nil {
+				return err
+			}
 		}
+		if _, err := tx.ExecContext(r.Context(),
+			`INSERT INTO tournaments (id, name, status) VALUES (?, ?, 'setup')`,
+			tournamentID, event.Name,
+		); err != nil {
+			return err
+		}
+		for _, t := range tickets {
+			if _, err := tx.ExecContext(r.Context(),
+				`INSERT INTO competitors (id, tournament_id, name, email, ticket_tailor_id) VALUES (?, ?, ?, ?, ?)`,
+				newID(), tournamentID, t.FullName(), t.Email, t.ID,
+			); err != nil {
+				return err
+			}
+		}
+		return nil
+	}); err != nil {
+		writeError(w, http.StatusInternalServerError, "import failed: "+err.Error())
+		return
 	}
 
 	writeJSON(w, http.StatusOK, map[string]any{"count": len(tickets), "tournament": event.Name})
@@ -400,12 +419,18 @@ func (s *Server) handleUpdateMatch(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Confirm winner_id is one of the two players.
-	var p1ID, p2ID, stage, tournamentID string
+	var p1ID, p2ID, stage, status, tournamentID string
 	var round, position *int
 	if err := s.db.QueryRowContext(ctx, `
-		SELECT player1_id, player2_id, stage, round, position, tournament_id FROM matches WHERE id = ?
-	`, id).Scan(&p1ID, &p2ID, &stage, &round, &position, &tournamentID); err != nil {
+		SELECT player1_id, player2_id, stage, round, position, status, tournament_id FROM matches WHERE id = ?
+	`, id).Scan(&p1ID, &p2ID, &stage, &round, &position, &status, &tournamentID); err != nil {
 		writeError(w, http.StatusNotFound, "match not found")
+		return
+	}
+	// A completed knockout match has already fed its winner into the next round;
+	// re-recording it with a different winner would fork the bracket below it.
+	if status == "complete" {
+		writeError(w, http.StatusConflict, "match result already recorded")
 		return
 	}
 	if body.WinnerID != p1ID && body.WinnerID != p2ID {
@@ -420,28 +445,37 @@ func (s *Server) handleUpdateMatch(w http.ResponseWriter, r *http.Request) {
 		p2Score = body.Points
 	}
 
-	if _, err := s.db.ExecContext(ctx, `
-		UPDATE matches SET winner_id = ?, player1_score = ?, player2_score = ?, status = 'complete' WHERE id = ?
-	`, body.WinnerID, p1Score, p2Score, id); err != nil {
+	if err := s.withTx(ctx, func(tx *sql.Tx) error {
+		if _, err := tx.ExecContext(ctx, `
+			UPDATE matches SET winner_id = ?, player1_score = ?, player2_score = ?, status = 'complete' WHERE id = ?
+		`, body.WinnerID, p1Score, p2Score, id); err != nil {
+			return err
+		}
+
+		// Knockout matches feed their winner into the next round. The final
+		// (round 1) completes the tournament.
+		if stage == "knockout" && round != nil && position != nil {
+			if *round > 1 {
+				col := "player1_id"
+				if *position%2 == 1 {
+					col = "player2_id"
+				}
+				if _, err := tx.ExecContext(ctx, fmt.Sprintf(`
+					UPDATE matches SET %s = ?
+					WHERE tournament_id = ? AND stage = 'knockout' AND round = ? AND position = ?
+				`, col), body.WinnerID, tournamentID, *round-1, *position/2); err != nil {
+					return err
+				}
+			} else {
+				if _, err := tx.ExecContext(ctx, `UPDATE tournaments SET status = 'complete' WHERE id = ?`, tournamentID); err != nil {
+					return err
+				}
+			}
+		}
+		return nil
+	}); err != nil {
 		writeError(w, http.StatusInternalServerError, "update failed")
 		return
-	}
-
-	// Knockout matches feed their winner into the next round. The final
-	// (round 1) completes the tournament.
-	if stage == "knockout" && round != nil && position != nil {
-		if *round > 1 {
-			col := "player1_id"
-			if *position%2 == 1 {
-				col = "player2_id"
-			}
-			s.db.ExecContext(ctx, fmt.Sprintf(`
-				UPDATE matches SET %s = ?
-				WHERE tournament_id = ? AND stage = 'knockout' AND round = ? AND position = ?
-			`, col), body.WinnerID, tournamentID, *round-1, *position/2)
-		} else {
-			s.db.ExecContext(ctx, `UPDATE tournaments SET status = 'complete' WHERE id = ?`, tournamentID)
-		}
 	}
 
 	// Return the updated match with player names.
@@ -492,7 +526,7 @@ func (s *Server) handleDraw(w http.ResponseWriter, r *http.Request) {
 	}
 
 	rows, err := s.db.QueryContext(ctx, `
-		SELECT id FROM competitors WHERE tournament_id = ?
+		SELECT id FROM competitors WHERE tournament_id = ? AND removed = 0
 	`, tournamentID)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "query failed")
@@ -521,44 +555,46 @@ func (s *Server) handleDraw(w http.ResponseWriter, r *http.Request) {
 		competitorIDs[i], competitorIDs[j] = competitorIDs[j], competitorIDs[i]
 	})
 
-	for i := 0; i < body.NumGroups; i++ {
-		groupID := newID()
-		if _, err := s.db.ExecContext(ctx, `
-			INSERT INTO groups (id, tournament_id, name) VALUES (?, ?, ?)
-		`, groupID, tournamentID, groupName(i)); err != nil {
-			writeError(w, http.StatusInternalServerError, "create group failed")
-			return
-		}
-
-		members := competitorIDs[i*groupSize : (i+1)*groupSize]
-
-		for _, cID := range members {
-			if _, err := s.db.ExecContext(ctx, `
-				UPDATE competitors SET group_id = ? WHERE id = ?
-			`, groupID, cID); err != nil {
-				writeError(w, http.StatusInternalServerError, "assign group failed")
-				return
+	if err := s.withTx(ctx, func(tx *sql.Tx) error {
+		for i := 0; i < body.NumGroups; i++ {
+			groupID := newID()
+			if _, err := tx.ExecContext(ctx, `
+				INSERT INTO groups (id, tournament_id, name) VALUES (?, ?, ?)
+			`, groupID, tournamentID, groupName(i)); err != nil {
+				return err
 			}
-		}
 
-		// Round-robin: every pair plays once
-		for a := 0; a < len(members); a++ {
-			for b := a + 1; b < len(members); b++ {
-				if _, err := s.db.ExecContext(ctx, `
-					INSERT INTO matches (id, tournament_id, stage, group_id, player1_id, player2_id, status)
-					VALUES (?, ?, 'group', ?, ?, ?, 'pending')
-				`, newID(), tournamentID, groupID, members[a], members[b]); err != nil {
-					writeError(w, http.StatusInternalServerError, "create match failed")
-					return
+			members := competitorIDs[i*groupSize : (i+1)*groupSize]
+
+			for _, cID := range members {
+				if _, err := tx.ExecContext(ctx, `
+					UPDATE competitors SET group_id = ? WHERE id = ?
+				`, groupID, cID); err != nil {
+					return err
+				}
+			}
+
+			// Round-robin: every pair plays once
+			for a := 0; a < len(members); a++ {
+				for b := a + 1; b < len(members); b++ {
+					if _, err := tx.ExecContext(ctx, `
+						INSERT INTO matches (id, tournament_id, stage, group_id, player1_id, player2_id, status)
+						VALUES (?, ?, 'group', ?, ?, ?, 'pending')
+					`, newID(), tournamentID, groupID, members[a], members[b]); err != nil {
+						return err
+					}
 				}
 			}
 		}
-	}
 
-	if _, err := s.db.ExecContext(ctx, `
-		UPDATE tournaments SET status = 'group_stage' WHERE id = ?
-	`, tournamentID); err != nil {
-		writeError(w, http.StatusInternalServerError, "update status failed")
+		if _, err := tx.ExecContext(ctx, `
+			UPDATE tournaments SET status = 'group_stage' WHERE id = ?
+		`, tournamentID); err != nil {
+			return err
+		}
+		return nil
+	}); err != nil {
+		writeError(w, http.StatusInternalServerError, "draw failed: "+err.Error())
 		return
 	}
 
@@ -672,68 +708,70 @@ func (s *Server) handleAdvance(w http.ResponseWriter, r *http.Request) {
 		firstRound++
 	}
 
-	// Pre-create skeleton matches for every round after the first, so the full
-	// bracket tree exists with TBD slots that later winners feed into.
-	parentMatch := map[int]map[int]string{}
-	for round := firstRound - 1; round >= 1; round-- {
-		parentMatch[round] = map[int]string{}
-		for pos := 0; pos < (1 << (round - 1)); pos++ {
-			mid := newID()
-			if _, err := s.db.ExecContext(ctx, `
-				INSERT INTO matches (id, tournament_id, stage, round, position, status)
-				VALUES (?, ?, 'knockout', ?, ?, 'pending')
-			`, mid, tournamentID, round, pos); err != nil {
-				writeError(w, http.StatusInternalServerError, "create match failed")
-				return
+	if err := s.withTx(ctx, func(tx *sql.Tx) error {
+		// Pre-create skeleton matches for every round after the first, so the full
+		// bracket tree exists with TBD slots that later winners feed into.
+		parentMatch := map[int]map[int]string{}
+		for round := firstRound - 1; round >= 1; round-- {
+			parentMatch[round] = map[int]string{}
+			for pos := 0; pos < (1 << (round - 1)); pos++ {
+				mid := newID()
+				if _, err := tx.ExecContext(ctx, `
+					INSERT INTO matches (id, tournament_id, stage, round, position, status)
+					VALUES (?, ?, 'knockout', ?, ?, 'pending')
+				`, mid, tournamentID, round, pos); err != nil {
+					return err
+				}
+				parentMatch[round][pos] = mid
 			}
-			parentMatch[round][pos] = mid
-		}
-	}
-
-	// Seed the first round. A seed number beyond the qualifier count is a bye —
-	// the present player advances straight into the next round.
-	order := seedPositions(bracketSize)
-	for j := 0; j < bracketSize/2; j++ {
-		seedA, seedB := order[2*j], order[2*j+1]
-		var pA, pB *string
-		if seedA <= len(qualifiers) {
-			pA = &qualifiers[seedA-1]
-		}
-		if seedB <= len(qualifiers) {
-			pB = &qualifiers[seedB-1]
 		}
 
-		if pA != nil && pB != nil {
-			if _, err := s.db.ExecContext(ctx, `
-				INSERT INTO matches (id, tournament_id, stage, round, position, player1_id, player2_id, status)
-				VALUES (?, ?, 'knockout', ?, ?, ?, ?, 'pending')
-			`, newID(), tournamentID, firstRound, j, *pA, *pB); err != nil {
-				writeError(w, http.StatusInternalServerError, "create match failed")
-				return
+		// Seed the first round. A seed number beyond the qualifier count is a bye —
+		// the present player advances straight into the next round.
+		order := seedPositions(bracketSize)
+		for j := 0; j < bracketSize/2; j++ {
+			seedA, seedB := order[2*j], order[2*j+1]
+			var pA, pB *string
+			if seedA <= len(qualifiers) {
+				pA = &qualifiers[seedA-1]
 			}
-			continue
+			if seedB <= len(qualifiers) {
+				pB = &qualifiers[seedB-1]
+			}
+
+			if pA != nil && pB != nil {
+				if _, err := tx.ExecContext(ctx, `
+					INSERT INTO matches (id, tournament_id, stage, round, position, player1_id, player2_id, status)
+					VALUES (?, ?, 'knockout', ?, ?, ?, ?, 'pending')
+				`, newID(), tournamentID, firstRound, j, *pA, *pB); err != nil {
+					return err
+				}
+				continue
+			}
+
+			winner := pA
+			if winner == nil {
+				winner = pB
+			}
+			col := "player1_id"
+			if j%2 == 1 {
+				col = "player2_id"
+			}
+			if _, err := tx.ExecContext(ctx,
+				fmt.Sprintf(`UPDATE matches SET %s = ? WHERE id = ?`, col),
+				*winner, parentMatch[firstRound-1][j/2]); err != nil {
+				return err
+			}
 		}
 
-		winner := pA
-		if winner == nil {
-			winner = pB
+		if _, err := tx.ExecContext(ctx, `
+			UPDATE tournaments SET status = 'knockout' WHERE id = ?
+		`, tournamentID); err != nil {
+			return err
 		}
-		col := "player1_id"
-		if j%2 == 1 {
-			col = "player2_id"
-		}
-		if _, err := s.db.ExecContext(ctx,
-			fmt.Sprintf(`UPDATE matches SET %s = ? WHERE id = ?`, col),
-			*winner, parentMatch[firstRound-1][j/2]); err != nil {
-			writeError(w, http.StatusInternalServerError, "seed bye failed")
-			return
-		}
-	}
-
-	if _, err := s.db.ExecContext(ctx, `
-		UPDATE tournaments SET status = 'knockout' WHERE id = ?
-	`, tournamentID); err != nil {
-		writeError(w, http.StatusInternalServerError, "update status failed")
+		return nil
+	}); err != nil {
+		writeError(w, http.StatusInternalServerError, "advance failed: "+err.Error())
 		return
 	}
 

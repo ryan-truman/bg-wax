@@ -14,20 +14,21 @@ var schema string
 // Open opens (or creates) the SQLite database at path and runs the schema
 // to ensure all tables exist. Call Close on the returned *sql.DB when done.
 func Open(path string) (*sql.DB, error) {
-	db, err := sql.Open("sqlite", path)
+	// Pragmas live in the DSN so they apply to every connection the driver
+	// opens, not just the first one (PRAGMAs are per-connection in SQLite).
+	//   foreign_keys  – enforce FK constraints (off by default in SQLite)
+	//   journal_mode  – WAL for better read/write concurrency
+	//   busy_timeout  – wait up to 5s for a lock instead of failing immediately
+	dsn := fmt.Sprintf("file:%s?_pragma=foreign_keys(1)&_pragma=journal_mode(wal)&_pragma=busy_timeout(5000)", path)
+	db, err := sql.Open("sqlite", dsn)
 	if err != nil {
 		return nil, fmt.Errorf("open db: %w", err)
 	}
 
-	// Foreign key enforcement is off by default in SQLite; turn it on.
-	// WAL mode gives better read/write concurrency for a local app.
-	if _, err := db.Exec(`
-		PRAGMA foreign_keys = ON;
-		PRAGMA journal_mode = WAL;
-	`); err != nil {
-		db.Close()
-		return nil, fmt.Errorf("set pragmas: %w", err)
-	}
+	// This is a single-user local app: capping the pool at one connection
+	// eliminates lock contention entirely and guarantees that pragmas and
+	// transactions all share the same underlying SQLite session.
+	db.SetMaxOpenConns(1)
 
 	if _, err := db.Exec(schema); err != nil {
 		db.Close()
