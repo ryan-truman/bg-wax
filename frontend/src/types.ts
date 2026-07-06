@@ -81,11 +81,13 @@ export interface Group {
 /**
  * Match is a single fixture in either the group or knockout stage. Player and
  * score fields are nullable because a knockout slot may not be filled yet.
+ * Bracket is set for knockout matches only: 1 = main bracket, 2 = consolation.
  */
 export interface Match {
   id: string;
   stage: MatchStage;
   group_id: string | null;
+  bracket: number /* int */ | null;
   round: number /* int */ | null;
   position: number /* int */ | null;
   player1_id: string | null;
@@ -96,4 +98,20 @@ export interface Match {
   player1_score: number /* int */ | null;
   player2_score: number /* int */ | null;
   status: MatchStatus;
+}
+/**
+ * TicketTailorEvent is one event on the connected Ticket Tailor account,
+ * listed so the user can pick which event to import attendees from.
+ */
+export interface TicketTailorEvent {
+  id: string;
+  name: string;
+}
+/**
+ * Config reports server-side runtime flags the frontend adapts to. Demo is
+ * true when the server was started by `just demo`; the Settings page then
+ * pre-fills the built-in demo API credentials if none are saved.
+ */
+export interface Config {
+  demo: boolean;
 }

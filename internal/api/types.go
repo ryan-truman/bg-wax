@@ -83,10 +83,12 @@ type Group struct {
 
 // Match is a single fixture in either the group or knockout stage. Player and
 // score fields are nullable because a knockout slot may not be filled yet.
+// Bracket is set for knockout matches only: 1 = main bracket, 2 = consolation.
 type Match struct {
 	ID           string      `json:"id"`
 	Stage        MatchStage  `json:"stage"`
 	GroupID      *string     `json:"group_id"`
+	Bracket      *int        `json:"bracket"`
 	Round        *int        `json:"round"`
 	Position     *int        `json:"position"`
 	Player1ID    *string     `json:"player1_id"`
@@ -97,4 +99,18 @@ type Match struct {
 	Player1Score *int        `json:"player1_score"`
 	Player2Score *int        `json:"player2_score"`
 	Status       MatchStatus `json:"status"`
+}
+
+// TicketTailorEvent is one event on the connected Ticket Tailor account,
+// listed so the user can pick which event to import attendees from.
+type TicketTailorEvent struct {
+	ID   string `json:"id"`
+	Name string `json:"name"`
+}
+
+// Config reports server-side runtime flags the frontend adapts to. Demo is
+// true when the server was started by `just demo`; the Settings page then
+// pre-fills the built-in demo API credentials if none are saved.
+type Config struct {
+	Demo bool `json:"demo"`
 }

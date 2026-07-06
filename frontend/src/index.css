@@ -6,6 +6,11 @@
   --color-brand-dark: #2d6b4f;
   --color-wax-red:    #e8142e;   /* logo red */
 
+  /* Tonal variants for text on dark surfaces (MD3: lighten accents in dark
+     themes for contrast — the logo colours stay for fills and decoration) */
+  --color-brand-bright:   #6cc09a;
+  --color-wax-red-bright: #ff5c6e;
+
   /* App surfaces — charcoal, not pure black */
   --color-surface-base:  #242424;
   --color-surface-card:  #2e2e2e;

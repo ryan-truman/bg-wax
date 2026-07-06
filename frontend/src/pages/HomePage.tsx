@@ -69,12 +69,5 @@ export default function HomePage({ tournament }: Props) {
     )
   }
 
-  return (
-    <div>
-      <h2 className="text-xs uppercase tracking-widest mb-6" style={{ color: '#777' }}>
-        {tournament.status === 'complete' ? 'Final Results' : 'Knockout Bracket'}
-      </h2>
-      <BracketView />
-    </div>
-  )
+  return <BracketView />
 }

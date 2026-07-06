@@ -8,6 +8,7 @@ import (
 	"fmt"
 	mathrand "math/rand"
 	"net/http"
+	"os"
 	"sort"
 
 	"backgammon/internal/tickettailor"
@@ -41,6 +42,10 @@ func (s *Server) withTx(ctx context.Context, fn func(*sql.Tx) error) error {
 }
 
 // --- health ------------------------------------------------------------------
+
+func (s *Server) handleGetConfig(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, http.StatusOK, Config{Demo: os.Getenv("DEMO_MODE") == "1"})
+}
 
 func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
@@ -103,28 +108,71 @@ func (s *Server) handleListCompetitors(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, competitors)
 }
 
+// handleListTicketTailorEvents lists the events on the Ticket Tailor account
+// so the frontend can offer a picker. POST because the API key travels in the
+// request body rather than the URL.
+func (s *Server) handleListTicketTailorEvents(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		APIKey string `json:"api_key"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil || body.APIKey == "" {
+		writeError(w, http.StatusBadRequest, "api_key is required")
+		return
+	}
+
+	events := tickettailor.DemoEvents
+	if body.APIKey != tickettailor.DemoKey {
+		var err error
+		events, err = tickettailor.New(body.APIKey).ListEvents()
+		if err != nil {
+			writeError(w, http.StatusBadGateway, "could not fetch events: "+err.Error())
+			return
+		}
+	}
+
+	out := make([]TicketTailorEvent, 0, len(events))
+	for _, e := range events {
+		out = append(out, TicketTailorEvent{ID: e.ID, Name: e.Name})
+	}
+	writeJSON(w, http.StatusOK, out)
+}
+
 func (s *Server) handleImport(w http.ResponseWriter, r *http.Request) {
 	var body struct {
-		APIKey    string `json:"api_key"`
-		EventName string `json:"event_name"`
+		APIKey  string `json:"api_key"`
+		EventID string `json:"event_id"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&body); err != nil || body.APIKey == "" || body.EventName == "" {
-		writeError(w, http.StatusBadRequest, "api_key and event_name are required")
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil || body.APIKey == "" || body.EventID == "" {
+		writeError(w, http.StatusBadRequest, "api_key and event_id are required")
 		return
 	}
 
-	client := tickettailor.New(body.APIKey)
+	var (
+		event   *tickettailor.Event
+		tickets []tickettailor.IssuedTicket
+	)
+	if body.APIKey == tickettailor.DemoKey {
+		var err error
+		event, tickets, err = tickettailor.DemoEvent(body.EventID)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+	} else {
+		client := tickettailor.New(body.APIKey)
 
-	event, err := client.FindEventByName(body.EventName)
-	if err != nil {
-		writeError(w, http.StatusBadGateway, "could not find event: "+err.Error())
-		return
-	}
+		var err error
+		event, err = client.GetEvent(body.EventID)
+		if err != nil {
+			writeError(w, http.StatusBadGateway, "could not find event: "+err.Error())
+			return
+		}
 
-	tickets, err := client.TicketsForEvent(event.ID)
-	if err != nil {
-		writeError(w, http.StatusBadGateway, "could not fetch tickets: "+err.Error())
-		return
+		tickets, err = client.TicketsForEvent(event.ID)
+		if err != nil {
+			writeError(w, http.StatusBadGateway, "could not fetch tickets: "+err.Error())
+			return
+		}
 	}
 
 	// Replace the existing tournament wholesale. Wrapped in a transaction so a
@@ -368,7 +416,7 @@ func (s *Server) handleListMatches(w http.ResponseWriter, r *http.Request) {
 
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT
-			m.id, m.stage, m.group_id, m.round, m.position,
+			m.id, m.stage, m.group_id, m.bracket, m.round, m.position,
 			m.player1_id, p1.name, m.player2_id, p2.name,
 			m.winner_id, m.player1_score, m.player2_score, m.status
 		FROM matches m
@@ -389,7 +437,7 @@ func (s *Server) handleListMatches(w http.ResponseWriter, r *http.Request) {
 	for rows.Next() {
 		var m Match
 		if err := rows.Scan(
-			&m.ID, &m.Stage, &m.GroupID, &m.Round, &m.Position,
+			&m.ID, &m.Stage, &m.GroupID, &m.Bracket, &m.Round, &m.Position,
 			&m.Player1ID, &m.Player1Name, &m.Player2ID, &m.Player2Name,
 			&m.WinnerID, &m.Player1Score, &m.Player2Score, &m.Status,
 		); err != nil {
@@ -420,10 +468,10 @@ func (s *Server) handleUpdateMatch(w http.ResponseWriter, r *http.Request) {
 
 	// Confirm winner_id is one of the two players.
 	var p1ID, p2ID, stage, status, tournamentID string
-	var round, position *int
+	var bracket, round, position *int
 	if err := s.db.QueryRowContext(ctx, `
-		SELECT player1_id, player2_id, stage, round, position, status, tournament_id FROM matches WHERE id = ?
-	`, id).Scan(&p1ID, &p2ID, &stage, &round, &position, &status, &tournamentID); err != nil {
+		SELECT player1_id, player2_id, stage, bracket, round, position, status, tournament_id FROM matches WHERE id = ?
+	`, id).Scan(&p1ID, &p2ID, &stage, &bracket, &round, &position, &status, &tournamentID); err != nil {
 		writeError(w, http.StatusNotFound, "match not found")
 		return
 	}
@@ -452,8 +500,9 @@ func (s *Server) handleUpdateMatch(w http.ResponseWriter, r *http.Request) {
 			return err
 		}
 
-		// Knockout matches feed their winner into the next round. The final
-		// (round 1) completes the tournament.
+		// Knockout matches feed their winner into the next round of their own
+		// bracket. Once every bracket's final is played, the tournament is
+		// complete.
 		if stage == "knockout" && round != nil && position != nil {
 			if *round > 1 {
 				col := "player1_id"
@@ -462,13 +511,22 @@ func (s *Server) handleUpdateMatch(w http.ResponseWriter, r *http.Request) {
 				}
 				if _, err := tx.ExecContext(ctx, fmt.Sprintf(`
 					UPDATE matches SET %s = ?
-					WHERE tournament_id = ? AND stage = 'knockout' AND round = ? AND position = ?
-				`, col), body.WinnerID, tournamentID, *round-1, *position/2); err != nil {
+					WHERE tournament_id = ? AND stage = 'knockout' AND bracket IS ? AND round = ? AND position = ?
+				`, col), body.WinnerID, tournamentID, bracket, *round-1, *position/2); err != nil {
 					return err
 				}
 			} else {
-				if _, err := tx.ExecContext(ctx, `UPDATE tournaments SET status = 'complete' WHERE id = ?`, tournamentID); err != nil {
+				var unfinishedFinals int
+				if err := tx.QueryRowContext(ctx, `
+					SELECT COUNT(*) FROM matches
+					WHERE tournament_id = ? AND stage = 'knockout' AND round = 1 AND status != 'complete'
+				`, tournamentID).Scan(&unfinishedFinals); err != nil {
 					return err
+				}
+				if unfinishedFinals == 0 {
+					if _, err := tx.ExecContext(ctx, `UPDATE tournaments SET status = 'complete' WHERE id = ?`, tournamentID); err != nil {
+						return err
+					}
 				}
 			}
 		}
@@ -482,7 +540,7 @@ func (s *Server) handleUpdateMatch(w http.ResponseWriter, r *http.Request) {
 	var m Match
 	if err := s.db.QueryRowContext(ctx, `
 		SELECT
-			m.id, m.stage, m.group_id, m.round, m.position,
+			m.id, m.stage, m.group_id, m.bracket, m.round, m.position,
 			m.player1_id, p1.name, m.player2_id, p2.name,
 			m.winner_id, m.player1_score, m.player2_score, m.status
 		FROM matches m
@@ -490,7 +548,7 @@ func (s *Server) handleUpdateMatch(w http.ResponseWriter, r *http.Request) {
 		LEFT JOIN competitors p2 ON p2.id = m.player2_id
 		WHERE m.id = ?
 	`, id).Scan(
-		&m.ID, &m.Stage, &m.GroupID, &m.Round, &m.Position,
+		&m.ID, &m.Stage, &m.GroupID, &m.Bracket, &m.Round, &m.Position,
 		&m.Player1ID, &m.Player1Name, &m.Player2ID, &m.Player2Name,
 		&m.WinnerID, &m.Player1Score, &m.Player2Score, &m.Status,
 	); err != nil {
@@ -517,12 +575,44 @@ func (s *Server) handleDraw(w http.ResponseWriter, r *http.Request) {
 		body.NumGroups = 8
 	}
 
-	var tournamentID string
+	var tournamentID, status string
 	if err := s.db.QueryRowContext(ctx, `
-		SELECT id FROM tournaments WHERE status = 'setup' ORDER BY created_at DESC LIMIT 1
-	`).Scan(&tournamentID); err != nil {
-		writeError(w, http.StatusBadRequest, "no tournament in setup state")
+		SELECT id, status FROM tournaments ORDER BY created_at DESC LIMIT 1
+	`).Scan(&tournamentID, &status); err != nil {
+		writeError(w, http.StatusBadRequest, "no tournament")
 		return
+	}
+	if status != string(TournamentStatusSetup) && status != string(TournamentStatusGroupStage) {
+		writeError(w, http.StatusBadRequest, "draw is only available before the knockout stage")
+		return
+	}
+
+	// Redraw: allowed until the first result is recorded, then the draw is
+	// locked in. Wipes the previous groups and their matches.
+	if status == string(TournamentStatusGroupStage) {
+		var started int
+		if err := s.db.QueryRowContext(ctx, `
+			SELECT COUNT(*) FROM matches WHERE tournament_id = ? AND status != 'pending'
+		`, tournamentID).Scan(&started); err != nil {
+			writeError(w, http.StatusInternalServerError, "query failed")
+			return
+		}
+		if started > 0 {
+			writeError(w, http.StatusBadRequest, "cannot redraw after a match has been played")
+			return
+		}
+		// Order matters: competitors reference groups (FK), so unlink them
+		// before deleting the groups.
+		for _, stmt := range []string{
+			`DELETE FROM matches WHERE tournament_id = ?`,
+			`UPDATE competitors SET group_id = NULL WHERE tournament_id = ?`,
+			`DELETE FROM groups WHERE tournament_id = ?`,
+		} {
+			if _, err := s.db.ExecContext(ctx, stmt, tournamentID); err != nil {
+				writeError(w, http.StatusInternalServerError, "clear previous draw failed")
+				return
+			}
+		}
 	}
 
 	rows, err := s.db.QueryContext(ctx, `
@@ -601,8 +691,10 @@ func (s *Server) handleDraw(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
-// advanceCount is how many competitors advance from each group to the knockout.
-const advanceCount = 2
+// defaultAdvanceCount is how many competitors advance from each group to the
+// knockout when the request doesn't specify a count. With the default two
+// brackets, the top half go to the main bracket and the rest to the consolation.
+const defaultAdvanceCount = 4
 
 // nextPow2 returns the smallest power of two >= n.
 func nextPow2(n int) int {
@@ -629,8 +721,168 @@ func seedPositions(size int) []int {
 	return order
 }
 
+// qualifier is a competitor advancing to the knockout, with the group-stage
+// record used for seeding and their group for clash avoidance.
+type qualifier struct {
+	id      string
+	groupID string
+	points  int
+	won     int
+}
+
+// seedBand groups 0-based seed indexes into the bands within which players are
+// interchangeable when avoiding same-group clashes: {1}, {2}, {3-4}, {5-8}, …
+// A seed's band determines the earliest round it can meet a higher band, so
+// permuting within a band keeps the score-based seeding structurally intact.
+func seedBand(seedIdx int) int {
+	band := 0
+	for threshold := 1; seedIdx >= threshold; threshold <<= 1 {
+		band++
+	}
+	return band
+}
+
+// clashCost scores a bracket layout by how early same-group players meet.
+// slots[i] is a qualifier index (or -1 for a bye); consecutive pairs are
+// first-round matches, consecutive quads are round-of-4 subtrees, and so on.
+// Earlier possible meetings are weighted far more heavily than later ones, so
+// minimizing the cost pushes same-group meetings as late as possible.
+func clashCost(slots []int, quals []qualifier) int {
+	cost := 0
+	weight := 1 << 24
+	for sub := 2; sub <= len(slots)/2; sub *= 2 {
+		for start := 0; start < len(slots); start += sub {
+			counts := map[string]int{}
+			for i := start; i < start+sub; i++ {
+				if slots[i] >= 0 {
+					counts[quals[slots[i]].groupID]++
+				}
+			}
+			for _, c := range counts {
+				if c > 1 {
+					cost += (c - 1) * weight
+				}
+			}
+		}
+		weight >>= 6
+	}
+	return cost
+}
+
+// avoidGroupClashes permutes players between slots of the same seed band until
+// no such swap delays a same-group meeting further. Bye slots stay fixed so the
+// top seeds keep their byes.
+func avoidGroupClashes(slots []int, quals []qualifier) {
+	for improved := true; improved; {
+		improved = false
+		best := clashCost(slots, quals)
+		for i := 0; i < len(slots); i++ {
+			for j := i + 1; j < len(slots); j++ {
+				a, b := slots[i], slots[j]
+				if a < 0 || b < 0 || seedBand(a) != seedBand(b) {
+					continue
+				}
+				slots[i], slots[j] = b, a
+				if c := clashCost(slots, quals); c < best {
+					best = c
+					improved = true
+				} else {
+					slots[i], slots[j] = a, b
+				}
+			}
+		}
+	}
+}
+
+// createKnockoutBracket seeds quals by points (then wins) into a new
+// single-elimination bracket, keeping same-group players apart for as long as
+// possible, and inserts all its matches tagged with the given bracket number.
+func (s *Server) createKnockoutBracket(ctx context.Context, tournamentID string, bracket int, quals []qualifier) error {
+	sort.SliceStable(quals, func(i, j int) bool {
+		if quals[i].points != quals[j].points {
+			return quals[i].points > quals[j].points
+		}
+		return quals[i].won > quals[j].won
+	})
+
+	size := nextPow2(len(quals))
+	firstRound := 0
+	for (1 << firstRound) < size {
+		firstRound++
+	}
+
+	// Lay seeds out in standard bracket order, then shuffle within seed bands
+	// to push same-group meetings as late as possible. A slot holding -1 is a
+	// bye: seed numbers beyond the qualifier count.
+	order := seedPositions(size)
+	slots := make([]int, size)
+	for i, seed := range order {
+		if seed <= len(quals) {
+			slots[i] = seed - 1
+		} else {
+			slots[i] = -1
+		}
+	}
+	avoidGroupClashes(slots, quals)
+
+	// Pre-create skeleton matches for every round after the first, so the full
+	// bracket tree exists with TBD slots that later winners feed into.
+	parentMatch := map[int]map[int]string{}
+	for round := firstRound - 1; round >= 1; round-- {
+		parentMatch[round] = map[int]string{}
+		for pos := 0; pos < (1 << (round - 1)); pos++ {
+			mid := newID()
+			if _, err := s.db.ExecContext(ctx, `
+				INSERT INTO matches (id, tournament_id, stage, bracket, round, position, status)
+				VALUES (?, ?, 'knockout', ?, ?, ?, 'pending')
+			`, mid, tournamentID, bracket, round, pos); err != nil {
+				return err
+			}
+			parentMatch[round][pos] = mid
+		}
+	}
+
+	// First round: a pair with a bye sends its present player straight into the
+	// next round's slot.
+	for j := 0; j < size/2; j++ {
+		a, b := slots[2*j], slots[2*j+1]
+
+		if a >= 0 && b >= 0 {
+			if _, err := s.db.ExecContext(ctx, `
+				INSERT INTO matches (id, tournament_id, stage, bracket, round, position, player1_id, player2_id, status)
+				VALUES (?, ?, 'knockout', ?, ?, ?, ?, ?, 'pending')
+			`, newID(), tournamentID, bracket, firstRound, j, quals[a].id, quals[b].id); err != nil {
+				return err
+			}
+			continue
+		}
+
+		winner := a
+		if winner < 0 {
+			winner = b
+		}
+		col := "player1_id"
+		if j%2 == 1 {
+			col = "player2_id"
+		}
+		if _, err := s.db.ExecContext(ctx,
+			fmt.Sprintf(`UPDATE matches SET %s = ? WHERE id = ?`, col),
+			quals[winner].id, parentMatch[firstRound-1][j/2]); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
 func (s *Server) handleAdvance(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
+
+	var body struct {
+		AdvanceTotal  int  `json:"advance_total"`
+		SingleBracket bool `json:"single_bracket"`
+	}
+	json.NewDecoder(r.Body).Decode(&body)
 
 	var tournamentID string
 	if err := s.db.QueryRowContext(ctx, `
@@ -664,114 +916,59 @@ func (s *Server) handleAdvance(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Collect qualifiers bucketed by their finishing place in the group, so we
-	// can seed all group winners ahead of all runners-up.
-	type qual struct {
-		id     string
-		points int
-		won    int
+	// advance_total is the total number of players progressing across all
+	// groups; each group contributes an equal share of its top finishers.
+	perGroup := defaultAdvanceCount
+	if body.AdvanceTotal > 0 {
+		if body.AdvanceTotal%len(groupIDs) != 0 {
+			writeError(w, http.StatusBadRequest, fmt.Sprintf("%d players cannot be split evenly across %d groups", body.AdvanceTotal, len(groupIDs)))
+			return
+		}
+		perGroup = body.AdvanceTotal / len(groupIDs)
 	}
-	buckets := make([][]qual, advanceCount)
+	// A second bracket needs at least one place per group feeding it.
+	numBrackets := 2
+	if body.SingleBracket || perGroup < 2 {
+		numBrackets = 1
+	}
+
+	// Split each group's qualifiers between brackets: the top half of the
+	// advancing places go to the main bracket, the rest to the consolation.
+	mainPlaces := perGroup
+	if numBrackets == 2 {
+		mainPlaces = (perGroup + 1) / 2
+	}
+	brackets := make([][]qualifier, numBrackets)
 	for _, gid := range groupIDs {
 		standings, err := s.groupStandings(ctx, gid)
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, "standings failed")
 			return
 		}
-		for place := 0; place < advanceCount && place < len(standings); place++ {
-			buckets[place] = append(buckets[place], qual{standings[place].ID, standings[place].Points, standings[place].Won})
+		for place := 0; place < perGroup && place < len(standings); place++ {
+			b := 0
+			if place >= mainPlaces {
+				b = 1
+			}
+			brackets[b] = append(brackets[b], qualifier{standings[place].ID, gid, standings[place].Points, standings[place].Won})
 		}
 	}
 
-	var qualifiers []string
-	for place := 0; place < advanceCount; place++ {
-		b := buckets[place]
-		sort.SliceStable(b, func(i, j int) bool {
-			if b[i].points != b[j].points {
-				return b[i].points > b[j].points
-			}
-			return b[i].won > b[j].won
-		})
-		for _, q := range b {
-			qualifiers = append(qualifiers, q.id)
+	for bi, quals := range brackets {
+		if len(quals) < 2 {
+			writeError(w, http.StatusBadRequest, fmt.Sprintf("not enough qualifiers to form bracket %d", bi+1))
+			return
+		}
+		if err := s.createKnockoutBracket(ctx, tournamentID, bi+1, quals); err != nil {
+			writeError(w, http.StatusInternalServerError, "create bracket failed")
+			return
 		}
 	}
 
-	if len(qualifiers) < 2 {
-		writeError(w, http.StatusBadRequest, "not enough qualifiers to form a bracket")
-		return
-	}
-
-	bracketSize := nextPow2(len(qualifiers))
-	firstRound := 0
-	for (1 << firstRound) < bracketSize {
-		firstRound++
-	}
-
-	if err := s.withTx(ctx, func(tx *sql.Tx) error {
-		// Pre-create skeleton matches for every round after the first, so the full
-		// bracket tree exists with TBD slots that later winners feed into.
-		parentMatch := map[int]map[int]string{}
-		for round := firstRound - 1; round >= 1; round-- {
-			parentMatch[round] = map[int]string{}
-			for pos := 0; pos < (1 << (round - 1)); pos++ {
-				mid := newID()
-				if _, err := tx.ExecContext(ctx, `
-					INSERT INTO matches (id, tournament_id, stage, round, position, status)
-					VALUES (?, ?, 'knockout', ?, ?, 'pending')
-				`, mid, tournamentID, round, pos); err != nil {
-					return err
-				}
-				parentMatch[round][pos] = mid
-			}
-		}
-
-		// Seed the first round. A seed number beyond the qualifier count is a bye —
-		// the present player advances straight into the next round.
-		order := seedPositions(bracketSize)
-		for j := 0; j < bracketSize/2; j++ {
-			seedA, seedB := order[2*j], order[2*j+1]
-			var pA, pB *string
-			if seedA <= len(qualifiers) {
-				pA = &qualifiers[seedA-1]
-			}
-			if seedB <= len(qualifiers) {
-				pB = &qualifiers[seedB-1]
-			}
-
-			if pA != nil && pB != nil {
-				if _, err := tx.ExecContext(ctx, `
-					INSERT INTO matches (id, tournament_id, stage, round, position, player1_id, player2_id, status)
-					VALUES (?, ?, 'knockout', ?, ?, ?, ?, 'pending')
-				`, newID(), tournamentID, firstRound, j, *pA, *pB); err != nil {
-					return err
-				}
-				continue
-			}
-
-			winner := pA
-			if winner == nil {
-				winner = pB
-			}
-			col := "player1_id"
-			if j%2 == 1 {
-				col = "player2_id"
-			}
-			if _, err := tx.ExecContext(ctx,
-				fmt.Sprintf(`UPDATE matches SET %s = ? WHERE id = ?`, col),
-				*winner, parentMatch[firstRound-1][j/2]); err != nil {
-				return err
-			}
-		}
-
-		if _, err := tx.ExecContext(ctx, `
-			UPDATE tournaments SET status = 'knockout' WHERE id = ?
-		`, tournamentID); err != nil {
-			return err
-		}
-		return nil
-	}); err != nil {
-		writeError(w, http.StatusInternalServerError, "advance failed: "+err.Error())
+	if _, err := s.db.ExecContext(ctx, `
+		UPDATE tournaments SET status = 'knockout' WHERE id = ?
+	`, tournamentID); err != nil {
+		writeError(w, http.StatusInternalServerError, "update status failed")
 		return
 	}
 
@@ -783,7 +980,7 @@ func (s *Server) handleGetBracket(w http.ResponseWriter, r *http.Request) {
 
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT
-			m.id, m.stage, m.group_id, m.round, m.position,
+			m.id, m.stage, m.group_id, m.bracket, m.round, m.position,
 			m.player1_id, p1.name, m.player2_id, p2.name,
 			m.winner_id, m.player1_score, m.player2_score, m.status
 		FROM matches m
@@ -791,7 +988,7 @@ func (s *Server) handleGetBracket(w http.ResponseWriter, r *http.Request) {
 		LEFT JOIN competitors p2 ON p2.id = m.player2_id
 		WHERE m.stage = 'knockout'
 		  AND m.tournament_id = (SELECT id FROM tournaments ORDER BY created_at DESC LIMIT 1)
-		ORDER BY m.round DESC, m.position
+		ORDER BY m.bracket, m.round DESC, m.position
 	`)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "query failed")
@@ -803,7 +1000,7 @@ func (s *Server) handleGetBracket(w http.ResponseWriter, r *http.Request) {
 	for rows.Next() {
 		var m Match
 		if err := rows.Scan(
-			&m.ID, &m.Stage, &m.GroupID, &m.Round, &m.Position,
+			&m.ID, &m.Stage, &m.GroupID, &m.Bracket, &m.Round, &m.Position,
 			&m.Player1ID, &m.Player1Name, &m.Player2ID, &m.Player2Name,
 			&m.WinnerID, &m.Player1Score, &m.Player2Score, &m.Status,
 		); err != nil {

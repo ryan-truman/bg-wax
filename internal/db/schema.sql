@@ -31,6 +31,7 @@ CREATE TABLE IF NOT EXISTS matches (
     tournament_id TEXT NOT NULL REFERENCES tournaments(id),
     stage         TEXT NOT NULL,  -- 'group' | 'knockout'
     group_id      TEXT REFERENCES groups(id),  -- NULL for knockout matches
+    bracket       INTEGER,        -- knockout: 1 = main bracket, 2 = consolation; NULL for group matches
     round         INTEGER,        -- knockout: 1 = final, 2 = semis, etc.
     position      INTEGER,        -- slot within the round for bracket ordering
     player1_id    TEXT REFERENCES competitors(id),

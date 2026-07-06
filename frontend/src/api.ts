@@ -1,4 +1,4 @@
-import type { Tournament, Competitor, RemovedCompetitor, Group, Match } from './types'
+import type { Tournament, Competitor, RemovedCompetitor, Group, Match, TicketTailorEvent, Config } from './types'
 
 async function request<T>(path: string, options?: RequestInit): Promise<T> {
   const res = await fetch(path, {
@@ -14,6 +14,7 @@ async function request<T>(path: string, options?: RequestInit): Promise<T> {
 }
 
 export const api = {
+  getConfig: () => request<Config>('/api/config'),
   getTournament: () => request<Tournament>('/api/tournament'),
   getCompetitors: () => request<Competitor[]>('/api/competitors'),
   getRemovedCompetitors: () => request<RemovedCompetitor[]>('/api/competitors/removed'),
@@ -23,10 +24,16 @@ export const api = {
   getMatches: () => request<Match[]>('/api/matches'),
   getBracket: () => request<Match[]>('/api/bracket'),
 
-  importFromTicketTailor: (apiKey: string, eventName: string) =>
+  listTicketTailorEvents: (apiKey: string) =>
+    request<TicketTailorEvent[]>('/api/tickettailor/events', {
+      method: 'POST',
+      body: JSON.stringify({ api_key: apiKey }),
+    }),
+
+  importFromTicketTailor: (apiKey: string, eventId: string) =>
     request<{ count: number; tournament: string }>('/api/tournament/import', {
       method: 'POST',
-      body: JSON.stringify({ api_key: apiKey, event_name: eventName }),
+      body: JSON.stringify({ api_key: apiKey, event_id: eventId }),
     }),
 
   clearTournament: () =>
@@ -41,7 +48,11 @@ export const api = {
   deleteCompetitor: (id: string) =>
     request<void>(`/api/competitors/${id}`, { method: 'DELETE' }),
 
-  advance: () => request<void>('/api/tournament/advance', { method: 'POST' }),
+  advance: (advanceTotal: number, singleBracket: boolean) =>
+    request<void>('/api/tournament/advance', {
+      method: 'POST',
+      body: JSON.stringify({ advance_total: advanceTotal, single_bracket: singleBracket }),
+    }),
 
   updateMatch: (id: string, winner_id: string, points: number) =>
     request<Match>(`/api/matches/${id}`, {

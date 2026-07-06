@@ -1,29 +1,11 @@
 # Dependencies
-<<<<<<< HEAD
-/frontend/node_modules/
-
-# Build output
-/server
-/dist/
-/frontend/tsconfig.tsbuildinfo
-# Note: internal/web/dist/ is intentionally tracked — it is go:embed'd
-# into the server binary, so a fresh clone needs it to `go build`.
-
-# Local databases (SQLite + WAL sidecar files)
-*.db
-*.db-wal
-*.db-shm
-
-# Environment
-.env
-
-# OS noise
-=======
 node_modules/
 
 # Compiled binaries
 /server
 /dist/
+# Note: internal/web/dist/ is intentionally tracked — it is go:embed'd
+# into the server binary, so a fresh clone needs it to `go build`.
 
 # Go / TypeScript build caches
 *.tsbuildinfo
@@ -37,6 +19,8 @@ node_modules/
 # Local environment (committed template lives in .env.example)
 .env
 
+# Local Claude Code permission grants (machine-specific)
+.claude/settings.local.json
+
 # OS / editor cruft
->>>>>>> baa15d5 (added functionality for knock out rounds)
 .DS_Store

@@ -48,19 +48,6 @@ func main() {
 	}
 }
 
-var mockNames = []string{
-	"Alice Mortimer", "Ben Okoro", "Carla Reyes", "Dmitri Volkov",
-	"Elena Vasquez", "Femi Adeyemi", "Grace Hartley", "Hiro Nakamura",
-	"Ingrid Svensson", "Jomo Mwangi", "Kira Petrov", "Luca Ferretti",
-	"Maya Osei", "Niall Brennan", "Olivia Chen", "Paulo Salave'a",
-	"Quinn Dubois", "Rania El-Amin", "Sven Larsson", "Tara Nkosi",
-	"Ugo Bianchi", "Vera Holloway", "Will Okonkwo", "Xena Papadopoulos",
-	"Yusuf Hassan", "Zoe Tremblay", "Aaron Philips", "Bea Lindqvist",
-	"Carlos Medina", "Dara Fitzpatrick", "Emeka Obi", "Fatima Al-Rashid",
-	"George Stavros", "Hannah Byrne", "Ibrahim Al-Sayed", "Jade Okafor",
-	"Kenji Watanabe", "Lucia Montoya", "Marco Russo", "Nadia Kowalski",
-}
-
 func seedMock(database *sql.DB) error {
 	for _, table := range []string{"matches", "competitors", "groups", "tournaments"} {
 		if _, err := database.Exec("DELETE FROM " + table); err != nil {
@@ -68,45 +55,33 @@ func seedMock(database *sql.DB) error {
 		}
 	}
 
-	tournamentID := newID()
-	_, err := database.Exec(
-		`INSERT INTO tournaments (id, name, status) VALUES (?, ?, 'setup')`,
-		tournamentID, "Backgammon and Wax — Summer Open 2026",
-	)
+	// Same dataset the server serves for the "demo" API key, so the Settings
+	// page workflow and the seeded data stay consistent.
+	event, tickets, err := tickettailor.DemoEvent("demo-summer-open")
 	if err != nil {
+		return err
+	}
+
+	tournamentID := newID()
+	if _, err := database.Exec(
+		`INSERT INTO tournaments (id, name, status) VALUES (?, ?, 'setup')`,
+		tournamentID, event.Name,
+	); err != nil {
 		return fmt.Errorf("insert tournament: %w", err)
 	}
 
-	for i, name := range mockNames {
-		_, err := database.Exec(
+	for _, t := range tickets {
+		if _, err := database.Exec(
 			`INSERT INTO competitors (id, tournament_id, name, email, ticket_tailor_id)
 			 VALUES (?, ?, ?, ?, ?)`,
-			newID(), tournamentID, name,
-			fmt.Sprintf("%s@example.com", mockEmail(name)),
-			fmt.Sprintf("mock-ticket-%03d", i+1),
-		)
-		if err != nil {
-			return fmt.Errorf("insert competitor %s: %w", name, err)
+			newID(), tournamentID, t.FullName(), t.Email, t.ID,
+		); err != nil {
+			return fmt.Errorf("insert competitor %s: %w", t.FullName(), err)
 		}
 	}
 
-	log.Printf("seeded mock tournament with %d competitors", len(mockNames))
+	log.Printf("seeded mock tournament with %d competitors", len(tickets))
 	return nil
-}
-
-func mockEmail(name string) string {
-	result := ""
-	for _, c := range name {
-		switch {
-		case c >= 'a' && c <= 'z':
-			result += string(c)
-		case c >= 'A' && c <= 'Z':
-			result += string(c + 32)
-		case c == ' ':
-			result += "."
-		}
-	}
-	return result
 }
 
 func wipeAndSeed(database *sql.DB, apiKey, eventName string) error {

@@ -27,8 +27,10 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) routes(frontend fs.FS) {
 	s.mux.HandleFunc("GET /health", s.handleHealth)
+	s.mux.HandleFunc("GET /api/config", s.handleGetConfig)
 
 	s.mux.HandleFunc("GET /api/tournament", s.handleGetTournament)
+	s.mux.HandleFunc("POST /api/tickettailor/events", s.handleListTicketTailorEvents)
 	s.mux.HandleFunc("POST /api/tournament/import", s.handleImport)
 	s.mux.HandleFunc("POST /api/tournament/clear", s.handleClearTournament)
 

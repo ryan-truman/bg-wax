@@ -1,10 +1,17 @@
 set dotenv-load
 
-# Seed 40 fake competitors and start the server using an isolated demo database
+# Seed 40 fake competitors and start the server using an isolated demo database.
+# The frontend rebuilds automatically while the server runs — refresh the
+# browser to see changes. (Watch mode skips type checking; `just release` runs it.)
 demo:
-    cd frontend && npm run build
+    #!/usr/bin/env bash
+    set -euo pipefail
+    (cd frontend && npm run build)
     DB_PATH=demo.db go run ./cmd/seed --mock
-    DB_PATH=demo.db FRONTEND_DIR=internal/web/dist go run ./cmd/server
+    (cd frontend && exec npm run watch) &
+    watcher=$!
+    trap 'kill $watcher 2>/dev/null || true' EXIT
+    DB_PATH=demo.db DEMO_MODE=1 FRONTEND_DIR=internal/web/dist go run ./cmd/server
 
 # Start the server using the real database (competitors imported via Settings page)
 serve:

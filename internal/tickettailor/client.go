@@ -38,8 +38,8 @@ func (t IssuedTicket) FullName() string {
 	return t.FirstName + " " + t.LastName
 }
 
-// FindEventByName returns the first event whose name matches exactly.
-func (c *Client) FindEventByName(name string) (*Event, error) {
+// ListEvents returns every event on the account.
+func (c *Client) ListEvents() ([]Event, error) {
 	type response struct {
 		Data []Event `json:"data"`
 	}
@@ -48,8 +48,25 @@ func (c *Client) FindEventByName(name string) (*Event, error) {
 	if err := c.get("/events", nil, &result); err != nil {
 		return nil, err
 	}
+	return result.Data, nil
+}
 
-	for _, e := range result.Data {
+// GetEvent fetches a single event by its ID.
+func (c *Client) GetEvent(id string) (*Event, error) {
+	var e Event
+	if err := c.get("/events/"+url.PathEscape(id), nil, &e); err != nil {
+		return nil, err
+	}
+	return &e, nil
+}
+
+// FindEventByName returns the first event whose name matches exactly.
+func (c *Client) FindEventByName(name string) (*Event, error) {
+	events, err := c.ListEvents()
+	if err != nil {
+		return nil, err
+	}
+	for _, e := range events {
 		if e.Name == name {
 			return &e, nil
 		}

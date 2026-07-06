@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react'
 import { api } from '../api'
 import type { Match } from '../types'
-import { roundLabel } from '../components/BracketView'
+import { roundLabel, bracketLabel } from '../components/BracketView'
 
 export default function MatchHistoryPage() {
   const [matches, setMatches] = useState<Match[]>([])
@@ -37,12 +37,18 @@ export default function MatchHistoryPage() {
 
   const knockout = matches.filter(m => m.stage === 'knockout')
   const group = matches.filter(m => m.stage === 'group')
+  const brackets = [...new Set(knockout.map(m => m.bracket ?? 1))].sort((a, b) => a - b)
 
   return (
     <div className="max-w-2xl space-y-12">
-      {knockout.length > 0 && (
-        <KnockoutRounds matches={knockout} onUpdate={handleUpdate} />
-      )}
+      {brackets.map(b => (
+        <KnockoutRounds
+          key={b}
+          label={brackets.length > 1 ? `Knockout — ${bracketLabel(b)}` : 'Knockout'}
+          matches={knockout.filter(m => (m.bracket ?? 1) === b)}
+          onUpdate={handleUpdate}
+        />
+      ))}
       {group.length > 0 && (
         <StageGroup label={knockout.length > 0 ? 'Group Stage' : null} matches={group} onUpdate={handleUpdate} />
       )}
@@ -52,20 +58,20 @@ export default function MatchHistoryPage() {
 
 function StageHeader({ label }: { label: string }) {
   return (
-    <h2 className="text-sm uppercase tracking-widest font-black pb-2 border-b" style={{ color: 'var(--color-brand)', borderColor: 'var(--color-border)' }}>
+    <h2 className="text-sm uppercase tracking-widest font-black pb-2 border-b" style={{ color: 'var(--color-brand-bright)', borderColor: 'var(--color-border)' }}>
       {label}
     </h2>
   )
 }
 
-function KnockoutRounds({ matches, onUpdate }: { matches: Match[]; onUpdate: (m: Match) => void }) {
+function KnockoutRounds({ label, matches, onUpdate }: { label: string; matches: Match[]; onUpdate: (m: Match) => void }) {
   // Latest round first: the final (round 1) is the furthest-progressed, so
   // sort ascending by round number — whatever round is currently live sits on top.
   const rounds = [...new Set(matches.map(m => m.round))].sort((a, b) => (a ?? 0) - (b ?? 0))
 
   return (
     <div className="space-y-8">
-      <StageHeader label="Knockout" />
+      <StageHeader label={label} />
       {rounds.map(round => {
         const roundMatches = matches
           .filter(m => m.round === round)
@@ -150,7 +156,7 @@ function MatchSection({
           {count}
         </span>
       </div>
-      <div className="rounded border divide-y" style={{ borderColor: 'var(--color-border)', backgroundColor: 'var(--color-surface-card)' }}>
+      <div className="rounded-xl overflow-hidden border divide-y" style={{ borderColor: 'var(--color-border)', backgroundColor: 'var(--color-surface-card)' }}>
         {matches.map(m => <MatchRow key={m.id} match={m} onUpdate={onUpdate} />)}
       </div>
     </section>
@@ -231,13 +237,13 @@ function MatchRow({ match, onUpdate }: { match: Match; onUpdate: (m: Match) => v
     <div className="flex items-center gap-4 px-4 py-3 text-sm">
       {stageBadge}
       <div className="flex-1 flex items-center gap-2 min-w-0">
-        <span className={`truncate ${p1Won ? 'font-semibold' : ''}`} style={{ color: p1Won ? 'var(--color-brand)' : '#f0f0f0' }}>
+        <span className={`truncate ${p1Won ? 'font-semibold' : ''}`} style={{ color: p1Won ? 'var(--color-brand-bright)' : '#f0f0f0' }}>
           {match.player1_name ?? 'TBD'}
         </span>
         <span className="text-xs shrink-0" style={{ color: '#555' }}>
           {match.status === 'complete' ? 'def.' : 'vs'}
         </span>
-        <span className={`truncate ${p2Won ? 'font-semibold' : ''}`} style={{ color: p2Won ? 'var(--color-brand)' : '#f0f0f0' }}>
+        <span className={`truncate ${p2Won ? 'font-semibold' : ''}`} style={{ color: p2Won ? 'var(--color-brand-bright)' : '#f0f0f0' }}>
           {match.player2_name ?? 'TBD'}
         </span>
       </div>
