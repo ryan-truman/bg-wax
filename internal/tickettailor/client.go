@@ -8,16 +8,18 @@ import (
 	"time"
 )
 
-const baseURL = "https://api.tickettailor.com/v1"
+const defaultBaseURL = "https://api.tickettailor.com/v1"
 
 type Client struct {
 	apiKey     string
+	baseURL    string
 	httpClient *http.Client
 }
 
 func New(apiKey string) *Client {
 	return &Client{
-		apiKey: apiKey,
+		apiKey:     apiKey,
+		baseURL:    defaultBaseURL,
 		httpClient: &http.Client{Timeout: 15 * time.Second},
 	}
 }
@@ -29,13 +31,39 @@ type Event struct {
 
 type IssuedTicket struct {
 	ID        string `json:"id"`
+	OrderID   string `json:"order_id"`
 	FirstName string `json:"first_name"`
 	LastName  string `json:"last_name"`
 	Email     string `json:"email"`
+	Status    string `json:"status"` // "valid" or "voided"
 }
 
 func (t IssuedTicket) FullName() string {
 	return t.FirstName + " " + t.LastName
+}
+
+// DisplayNames returns one competitor name per ticket, in order. When several
+// tickets carry the same full name — typically one buyer purchasing for
+// friends — the second and later occurrences get a numeric suffix
+// ("Alice Mortimer 2", "Alice Mortimer 3") so each ticket is a distinguishable
+// competitor the organiser can then rename. Numbering follows ticket order, so
+// it stays stable when the contestant list is refreshed.
+func DisplayNames(tickets []IssuedTicket) []string {
+	total := map[string]int{}
+	for _, t := range tickets {
+		total[t.FullName()]++
+	}
+	seen := map[string]int{}
+	names := make([]string, len(tickets))
+	for i, t := range tickets {
+		name := t.FullName()
+		seen[name]++
+		if total[name] > 1 && seen[name] > 1 {
+			name = fmt.Sprintf("%s %d", name, seen[name])
+		}
+		names[i] = name
+	}
+	return names
 }
 
 // ListEvents returns every event on the account.
@@ -74,24 +102,32 @@ func (c *Client) FindEventByName(name string) (*Event, error) {
 	return nil, fmt.Errorf("no event found with name %q", name)
 }
 
-// TicketsForEvent fetches all issued tickets for an event, handling pagination.
+// TicketsForEvent fetches all valid issued tickets for an event, handling
+// pagination. Voided tickets (refunds, cancellations) are excluded — they are
+// not attendees.
 func (c *Client) TicketsForEvent(eventID string) ([]IssuedTicket, error) {
 	type response struct {
-		Data []IssuedTicket `json:"data"`
+		Data  []IssuedTicket `json:"data"`
 		Links struct {
 			Next string `json:"next"`
 		} `json:"links"`
 	}
 
 	var all []IssuedTicket
-	params := url.Values{"event_id": {eventID}, "limit": {"100"}}
+	params := url.Values{"event_id": {eventID}, "status": {"valid"}, "limit": {"100"}}
 
 	for {
 		var page response
 		if err := c.get("/issued_tickets", params, &page); err != nil {
 			return nil, err
 		}
-		all = append(all, page.Data...)
+		for _, t := range page.Data {
+			// The status filter is applied server-side; this guards against a
+			// ticket being voided while we paginate.
+			if t.Status == "valid" {
+				all = append(all, t)
+			}
+		}
 
 		if page.Links.Next == "" {
 			break
@@ -103,7 +139,7 @@ func (c *Client) TicketsForEvent(eventID string) ([]IssuedTicket, error) {
 }
 
 func (c *Client) get(path string, params url.Values, out any) error {
-	u := baseURL + path
+	u := c.baseURL + path
 	if len(params) > 0 {
 		u += "?" + params.Encode()
 	}

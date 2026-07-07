@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react'
 import { api } from '../api'
 import type { Competitor, RemovedCompetitor } from '../types'
+import ConfirmDialog from '../components/ConfirmDialog'
 
 export default function CompetitorsPage() {
   const [competitors, setCompetitors] = useState<Competitor[]>([])
@@ -9,6 +10,8 @@ export default function CompetitorsPage() {
   const [removing, setRemoving] = useState<string | null>(null)
   const [restoring, setRestoring] = useState<string | null>(null)
   const [confirm, setConfirm] = useState<{ id: string; name: string } | null>(null)
+  const [editing, setEditing] = useState<{ id: string; name: string } | null>(null)
+  const [renaming, setRenaming] = useState(false)
 
   useEffect(() => {
     Promise.all([api.getCompetitors(), api.getRemovedCompetitors()])
@@ -33,6 +36,23 @@ export default function CompetitorsPage() {
     }
   }
 
+  async function handleRename() {
+    if (!editing) return
+    const { id, name } = editing
+    const trimmed = name.trim()
+    if (!trimmed) return
+    setRenaming(true)
+    try {
+      await api.renameCompetitor(id, trimmed)
+      setCompetitors(prev => prev.map(c => c.id === id ? { ...c, name: trimmed } : c))
+      setEditing(null)
+    } catch (e) {
+      alert(e instanceof Error ? e.message : 'Failed to rename competitor.')
+    } finally {
+      setRenaming(false)
+    }
+  }
+
   async function handleRestore(id: string, name: string) {
     setRestoring(id)
     try {
@@ -50,31 +70,16 @@ export default function CompetitorsPage() {
   if (loading) return <p className="text-sm" style={{ color: '#888' }}>Loading…</p>
 
   return (
-    <div className="max-w-2xl">
+    <div className="max-w-2xl mx-auto">
       {confirm && (
-        <div className="fixed inset-0 flex items-center justify-center z-50" style={{ backgroundColor: 'rgba(0,0,0,0.6)' }}>
-          <div className="rounded-lg p-6 max-w-sm w-full mx-4 space-y-4 border" style={{ backgroundColor: 'var(--color-surface-card)', borderColor: 'var(--color-border)' }}>
-            <p className="text-sm" style={{ color: '#f0f0f0' }}>
-              Are you sure you want to remove <span className="font-semibold">{confirm.name}</span> from the tournament?
-            </p>
-            <div className="flex gap-2 justify-end">
-              <button
-                onClick={() => setConfirm(null)}
-                className="text-xs font-bold uppercase tracking-widest px-4 py-2 rounded border transition-colors"
-                style={{ borderColor: 'var(--color-border)', color: '#888' }}
-              >
-                Cancel
-              </button>
-              <button
-                onClick={handleConfirmRemove}
-                className="text-xs font-bold uppercase tracking-widest px-4 py-2 rounded transition-colors"
-                style={{ backgroundColor: 'var(--color-wax-red)', color: '#fff' }}
-              >
-                Remove
-              </button>
-            </div>
-          </div>
-        </div>
+        <ConfirmDialog
+          title="Remove Competitor"
+          message={`Are you sure you want to remove ${confirm.name} from the tournament?`}
+          confirmLabel="Remove"
+          danger
+          onCancel={() => setConfirm(null)}
+          onConfirm={handleConfirmRemove}
+        />
       )}
       <h2 className="text-xs uppercase tracking-widest mb-4" style={{ color: '#777' }}>
         Competitors — {competitors.length} registered
@@ -90,10 +95,35 @@ export default function CompetitorsPage() {
               <span className="text-xs tabular-nums w-6 text-right shrink-0" style={{ color: '#555' }}>
                 {i + 1}
               </span>
-              <span className="text-sm flex-1">{c.name}</span>
+              {editing?.id === c.id ? (
+                <input
+                  autoFocus
+                  value={editing.name}
+                  onChange={e => setEditing({ id: c.id, name: e.target.value })}
+                  onKeyDown={e => {
+                    if (e.key === 'Enter') handleRename()
+                    if (e.key === 'Escape') setEditing(null)
+                  }}
+                  onBlur={() => setEditing(null)}
+                  disabled={renaming}
+                  className="text-sm flex-1 rounded px-2 py-0.5 focus:outline-none"
+                  style={{ backgroundColor: 'var(--color-surface-input)', border: '1px solid var(--color-brand)', color: '#f0f0f0' }}
+                />
+              ) : (
+                <span className="text-sm flex-1">{c.name}</span>
+              )}
               <span className="text-xs tabular-nums shrink-0" style={{ color: 'var(--color-brand)' }}>{c.wins}W</span>
               <span className="text-xs tabular-nums shrink-0" style={{ color: '#888' }}>{c.losses}L</span>
               <span className="text-xs tabular-nums shrink-0 font-semibold" style={{ color: '#f0f0f0' }}>{c.points}pts</span>
+              <button
+                onClick={() => setEditing({ id: c.id, name: c.name })}
+                disabled={renaming || editing?.id === c.id}
+                title="Rename — e.g. when the ticket was bought under someone else's name"
+                className="text-xs w-6 h-6 flex items-center justify-center rounded border transition-colors disabled:opacity-40"
+                style={{ color: '#888', borderColor: 'var(--color-border)' }}
+              >
+                ✎
+              </button>
               <button
                 onClick={() => setConfirm({ id: c.id, name: c.name })}
                 disabled={removing === c.id}

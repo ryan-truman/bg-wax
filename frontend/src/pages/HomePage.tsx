@@ -7,7 +7,6 @@ import BracketView from '../components/BracketView'
 
 interface Props {
   tournament: Tournament | null
-  onUpdate: (t: Tournament) => void
 }
 
 export default function HomePage({ tournament }: Props) {
@@ -49,8 +48,8 @@ export default function HomePage({ tournament }: Props) {
       <div className="flex flex-col items-center justify-center py-32 gap-3 text-center">
         <p className="text-2xl font-bold tracking-widest uppercase" style={{ color: '#444' }}>Setup</p>
         <p className="text-sm" style={{ color: '#888' }}>Tournament not yet started. Run the draw to begin the group stage.</p>
-        <Link to="/settings" className="mt-2 text-sm transition-colors" style={{ color: 'var(--color-brand)' }}>
-          Go to Settings →
+        <Link to="/matches" className="mt-2 text-sm transition-colors" style={{ color: 'var(--color-brand)' }}>
+          Go to Match History →
         </Link>
       </div>
     )

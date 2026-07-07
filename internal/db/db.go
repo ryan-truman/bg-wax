@@ -37,6 +37,8 @@ func Open(path string) (*sql.DB, error) {
 
 	// Migrations for columns added after initial schema (errors ignored — column may already exist).
 	db.Exec(`ALTER TABLE competitors ADD COLUMN removed INTEGER NOT NULL DEFAULT 0`)
+	db.Exec(`ALTER TABLE competitors ADD COLUMN name_edited INTEGER NOT NULL DEFAULT 0`)
+	db.Exec(`ALTER TABLE competitors ADD COLUMN order_id TEXT`)
 	db.Exec(`ALTER TABLE matches ADD COLUMN bracket INTEGER`)
 
 	return db, nil

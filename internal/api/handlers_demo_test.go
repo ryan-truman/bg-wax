@@ -81,12 +81,16 @@ func TestRedraw(t *testing.T) {
 	if w := do("POST", "/api/tournament/import", `{"api_key":"demo","event_id":"demo-winter-classic"}`); w.Code != 200 {
 		t.Fatalf("import: status %d, body %s", w.Code, w.Body)
 	}
-	if w := do("POST", "/api/tournament/draw", `{"num_groups":4}`); w.Code != 204 {
+	putSettings(t, s, `{"num_groups":4}`)
+	if w := do("POST", "/api/tournament/draw", ""); w.Code != 204 {
 		t.Fatalf("initial draw: status %d, body %s", w.Code, w.Body)
 	}
 
-	// Redraw with a different group count while everything is pending.
-	if w := do("POST", "/api/tournament/draw", `{"num_groups":2}`); w.Code != 204 {
+	// Switch to automatic sizing and redraw while everything is pending:
+	// 16 players → 3 groups (6+5+5), so 15+10+10 = 35 round-robin matches.
+	// The old draw's 4 groups of 4 (6 matches each) must be gone.
+	putSettings(t, s, `{"num_groups":0}`)
+	if w := do("POST", "/api/tournament/draw", ""); w.Code != 204 {
 		t.Fatalf("redraw: status %d, body %s", w.Code, w.Body)
 	}
 	var matches []Match
@@ -94,10 +98,8 @@ func TestRedraw(t *testing.T) {
 	if err := json.NewDecoder(w.Body).Decode(&matches); err != nil {
 		t.Fatal(err)
 	}
-	// 2 groups of 8 → C(8,2)=28 round-robin matches each; the old draw's 4
-	// groups of 4 (6 matches each) must be gone.
-	if len(matches) != 56 {
-		t.Fatalf("expected 56 matches after redraw, got %d", len(matches))
+	if len(matches) != 35 {
+		t.Fatalf("expected 35 matches after redraw, got %d", len(matches))
 	}
 
 	// Record one result; redraw must now be rejected.
@@ -105,7 +107,7 @@ func TestRedraw(t *testing.T) {
 	if w := do("PATCH", "/api/matches/"+m.ID, `{"winner_id":"`+*m.Player1ID+`","points":2}`); w.Code != 200 {
 		t.Fatalf("record result: status %d, body %s", w.Code, w.Body)
 	}
-	if w := do("POST", "/api/tournament/draw", `{"num_groups":4}`); w.Code != 400 {
+	if w := do("POST", "/api/tournament/draw", ""); w.Code != 400 {
 		t.Fatalf("expected 400 redrawing after a result, got %d, body %s", w.Code, w.Body)
 	}
 }

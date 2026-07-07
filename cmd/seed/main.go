@@ -70,13 +70,14 @@ func seedMock(database *sql.DB) error {
 		return fmt.Errorf("insert tournament: %w", err)
 	}
 
-	for _, t := range tickets {
+	names := tickettailor.DisplayNames(tickets)
+	for i, t := range tickets {
 		if _, err := database.Exec(
-			`INSERT INTO competitors (id, tournament_id, name, email, ticket_tailor_id)
-			 VALUES (?, ?, ?, ?, ?)`,
-			newID(), tournamentID, t.FullName(), t.Email, t.ID,
+			`INSERT INTO competitors (id, tournament_id, name, email, ticket_tailor_id, order_id)
+			 VALUES (?, ?, ?, ?, ?, ?)`,
+			newID(), tournamentID, names[i], t.Email, t.ID, t.OrderID,
 		); err != nil {
-			return fmt.Errorf("insert competitor %s: %w", t.FullName(), err)
+			return fmt.Errorf("insert competitor %s: %w", names[i], err)
 		}
 	}
 
@@ -116,14 +117,15 @@ func wipeAndSeed(database *sql.DB, apiKey, eventName string) error {
 	}
 	log.Printf("found %d tickets", len(tickets))
 
-	for _, t := range tickets {
+	names := tickettailor.DisplayNames(tickets)
+	for i, t := range tickets {
 		_, err := database.Exec(
-			`INSERT INTO competitors (id, tournament_id, name, email, ticket_tailor_id)
-			 VALUES (?, ?, ?, ?, ?)`,
-			newID(), tournamentID, t.FullName(), t.Email, t.ID,
+			`INSERT INTO competitors (id, tournament_id, name, email, ticket_tailor_id, order_id)
+			 VALUES (?, ?, ?, ?, ?, ?)`,
+			newID(), tournamentID, names[i], t.Email, t.ID, t.OrderID,
 		)
 		if err != nil {
-			return fmt.Errorf("insert competitor %s: %w", t.FullName(), err)
+			return fmt.Errorf("insert competitor %s: %w", names[i], err)
 		}
 	}
 

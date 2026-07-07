@@ -108,6 +108,25 @@ type TicketTailorEvent struct {
 	Name string `json:"name"`
 }
 
+// Settings are organiser preferences persisted in the database, so they
+// survive restarts and apply wherever the buttons are pressed — the Settings
+// page configures behaviour, the Match History page carries the buttons.
+//
+// MinGroupGames is the number of group-stage games each player must get at
+// minimum: the automatic draw sizes groups at MinGroupGames+1 players, and
+// when the numbers don't divide evenly the remainder makes some groups one
+// player bigger — an extra game, never a shortfall. NumGroups overrides the
+// automatic sizing with a fixed group count (0 = automatic). AdvancePerGroup
+// is how many top finishers each group sends to the knockout. SingleBracket
+// puts all qualifiers in one bracket instead of splitting into Champion's and
+// Europa leagues.
+type Settings struct {
+	MinGroupGames   int  `json:"min_group_games"`
+	NumGroups       int  `json:"num_groups"`
+	AdvancePerGroup int  `json:"advance_per_group"`
+	SingleBracket   bool `json:"single_bracket"`
+}
+
 // Config reports server-side runtime flags the frontend adapts to. Demo is
 // true when the server was started by `just demo`; the Settings page then
 // pre-fills the built-in demo API credentials if none are saved.

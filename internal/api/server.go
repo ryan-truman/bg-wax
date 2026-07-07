@@ -28,6 +28,8 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 func (s *Server) routes(frontend fs.FS) {
 	s.mux.HandleFunc("GET /health", s.handleHealth)
 	s.mux.HandleFunc("GET /api/config", s.handleGetConfig)
+	s.mux.HandleFunc("GET /api/settings", s.handleGetSettings)
+	s.mux.HandleFunc("PUT /api/settings", s.handleUpdateSettings)
 
 	s.mux.HandleFunc("GET /api/tournament", s.handleGetTournament)
 	s.mux.HandleFunc("POST /api/tickettailor/events", s.handleListTicketTailorEvents)
@@ -38,6 +40,7 @@ func (s *Server) routes(frontend fs.FS) {
 	s.mux.HandleFunc("GET /api/competitors/removed", s.handleListRemovedCompetitors)
 	s.mux.HandleFunc("POST /api/competitors", s.handleAddCompetitor)
 	s.mux.HandleFunc("DELETE /api/competitors/{id}", s.handleDeleteCompetitor)
+	s.mux.HandleFunc("PATCH /api/competitors/{id}", s.handleRenameCompetitor)
 	s.mux.HandleFunc("POST /api/competitors/{id}/restore", s.handleRestoreCompetitor)
 
 	s.mux.HandleFunc("GET /api/groups", s.handleListGroups)

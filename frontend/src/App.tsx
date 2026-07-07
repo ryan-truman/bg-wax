@@ -15,8 +15,15 @@ export default function App() {
   }
   const { pathname } = useLocation()
 
+  // Poll the tournament so external changes (a reset or import from another
+  // device, a reseeded database) are picked up without a reload. A 404 means
+  // no tournament exists — clear it rather than keeping a stale one.
   useEffect(() => {
-    api.getTournament().then(setTournament).catch(() => {})
+    const load = () =>
+      api.getTournament().then(setTournament).catch(() => setTournament(null))
+    load()
+    const timer = setInterval(load, 5000)
+    return () => clearInterval(timer)
   }, [])
 
   const onSettings = pathname === '/settings'
@@ -84,8 +91,8 @@ export default function App() {
 
       <main className="px-6 py-8 max-w-7xl mx-auto">
         <Routes>
-          <Route path="/" element={<HomePage tournament={tournament} onUpdate={handleTournamentUpdate} />} />
-          <Route path="/matches" element={<MatchHistoryPage />} />
+          <Route path="/" element={<HomePage tournament={tournament} />} />
+          <Route path="/matches" element={<MatchHistoryPage tournament={tournament} onUpdate={handleTournamentUpdate} />} />
           <Route path="/competitors" element={<CompetitorsPage />} />
           <Route path="/settings" element={<SettingsPage tournament={tournament} onUpdate={handleTournamentUpdate} />} />
         </Routes>

@@ -1,4 +1,4 @@
-import type { Tournament, Competitor, RemovedCompetitor, Group, Match, TicketTailorEvent, Config } from './types'
+import type { Tournament, Competitor, RemovedCompetitor, Group, Match, TicketTailorEvent, Config, Settings } from './types'
 
 async function request<T>(path: string, options?: RequestInit): Promise<T> {
   const res = await fetch(path, {
@@ -15,6 +15,13 @@ async function request<T>(path: string, options?: RequestInit): Promise<T> {
 
 export const api = {
   getConfig: () => request<Config>('/api/config'),
+  getSettings: () => request<Settings>('/api/settings'),
+  // Partial updates are fine — the server merges over the stored settings.
+  updateSettings: (patch: Partial<Settings>) =>
+    request<void>('/api/settings', {
+      method: 'PUT',
+      body: JSON.stringify(patch),
+    }),
   getTournament: () => request<Tournament>('/api/tournament'),
   getCompetitors: () => request<Competitor[]>('/api/competitors'),
   getRemovedCompetitors: () => request<RemovedCompetitor[]>('/api/competitors/removed'),
@@ -39,20 +46,24 @@ export const api = {
   clearTournament: () =>
     request<void>('/api/tournament/clear', { method: 'POST' }),
 
-  runDraw: (numGroups: number) =>
-    request<void>('/api/tournament/draw', {
-      method: 'POST',
-      body: JSON.stringify({ num_groups: numGroups }),
-    }),
+  // Group sizing comes from the persisted settings; the draw takes no
+  // parameters.
+  runDraw: () =>
+    request<void>('/api/tournament/draw', { method: 'POST' }),
 
   deleteCompetitor: (id: string) =>
     request<void>(`/api/competitors/${id}`, { method: 'DELETE' }),
 
-  advance: (advanceTotal: number, singleBracket: boolean) =>
-    request<void>('/api/tournament/advance', {
-      method: 'POST',
-      body: JSON.stringify({ advance_total: advanceTotal, single_bracket: singleBracket }),
+  renameCompetitor: (id: string, name: string) =>
+    request<void>(`/api/competitors/${id}`, {
+      method: 'PATCH',
+      body: JSON.stringify({ name }),
     }),
+
+  // Qualifiers per group and bracket layout come from the persisted
+  // settings; advancing takes no parameters.
+  advance: () =>
+    request<void>('/api/tournament/advance', { method: 'POST' }),
 
   updateMatch: (id: string, winner_id: string, points: number) =>
     request<Match>(`/api/matches/${id}`, {

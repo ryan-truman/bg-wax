@@ -10,6 +10,8 @@ import (
 	"net/http"
 	"os"
 	"sort"
+	"strconv"
+	"strings"
 
 	"backgammon/internal/tickettailor"
 )
@@ -175,6 +177,36 @@ func (s *Server) handleImport(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// Local edits are authoritative: remember renamed and removed competitors
+	// by ticket ID so refreshing the contestant list (e.g. to pick up late
+	// ticket sales) can't undo the organiser's changes.
+	type localEdit struct {
+		name    string
+		edited  bool
+		removed bool
+	}
+	edits := map[string]localEdit{}
+	editRows, err := s.db.QueryContext(r.Context(), `
+		SELECT ticket_tailor_id, name, name_edited, removed
+		FROM competitors
+		WHERE ticket_tailor_id IS NOT NULL AND (name_edited = 1 OR removed = 1)
+	`)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "import failed: "+err.Error())
+		return
+	}
+	for editRows.Next() {
+		var tid string
+		var e localEdit
+		if err := editRows.Scan(&tid, &e.name, &e.edited, &e.removed); err != nil {
+			editRows.Close()
+			writeError(w, http.StatusInternalServerError, "import failed: "+err.Error())
+			return
+		}
+		edits[tid] = e
+	}
+	editRows.Close()
+
 	// Replace the existing tournament wholesale. Wrapped in a transaction so a
 	// mid-import failure can't leave the tables half-cleared or half-populated.
 	tournamentID := newID()
@@ -190,10 +222,21 @@ func (s *Server) handleImport(w http.ResponseWriter, r *http.Request) {
 		); err != nil {
 			return err
 		}
-		for _, t := range tickets {
+		// Duplicate ticket names get a numeric suffix ("Alice Mortimer 2") so
+		// each ticket is a distinguishable competitor before any renaming.
+		displayNames := tickettailor.DisplayNames(tickets)
+		for i, t := range tickets {
+			name, edited, removed := displayNames[i], false, false
+			if e, ok := edits[t.ID]; ok {
+				edited, removed = e.edited, e.removed
+				if e.edited {
+					name = e.name
+				}
+			}
 			if _, err := tx.ExecContext(r.Context(),
-				`INSERT INTO competitors (id, tournament_id, name, email, ticket_tailor_id) VALUES (?, ?, ?, ?, ?)`,
-				newID(), tournamentID, t.FullName(), t.Email, t.ID,
+				`INSERT INTO competitors (id, tournament_id, name, email, ticket_tailor_id, order_id, name_edited, removed)
+				 VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+				newID(), tournamentID, name, t.Email, t.ID, t.OrderID, edited, removed,
 			); err != nil {
 				return err
 			}
@@ -207,12 +250,121 @@ func (s *Server) handleImport(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"count": len(tickets), "tournament": event.Name})
 }
 
-func (s *Server) handleClearTournament(w http.ResponseWriter, r *http.Request) {
-	for _, table := range []string{"matches", "competitors", "groups", "tournaments"} {
-		if _, err := s.db.ExecContext(r.Context(), "DELETE FROM "+table); err != nil {
-			writeError(w, http.StatusInternalServerError, "clear failed: "+err.Error())
-			return
+// defaultMinGroupGames is the target group-stage games per player when the
+// organiser hasn't configured one: groups of five, four games each.
+const defaultMinGroupGames = 4
+
+// loadSettings returns the persisted organiser preferences, with any unset or
+// out-of-range value falling back to its default.
+func (s *Server) loadSettings(ctx context.Context) Settings {
+	st := Settings{
+		MinGroupGames:   defaultMinGroupGames,
+		NumGroups:       0, // automatic
+		AdvancePerGroup: defaultAdvanceCount,
+		SingleBracket:   false,
+	}
+	rows, err := s.db.QueryContext(ctx, `SELECT key, value FROM settings`)
+	if err != nil {
+		return st
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var k, v string
+		if rows.Scan(&k, &v) != nil {
+			continue
 		}
+		switch k {
+		case "min_group_games":
+			if n, err := strconv.Atoi(v); err == nil && n >= 3 && n <= 10 {
+				st.MinGroupGames = n
+			}
+		case "num_groups":
+			if n, err := strconv.Atoi(v); err == nil && n >= 0 && n <= 26 {
+				st.NumGroups = n
+			}
+		case "advance_per_group":
+			if n, err := strconv.Atoi(v); err == nil && n >= 1 && n <= 8 {
+				st.AdvancePerGroup = n
+			}
+		case "single_bracket":
+			st.SingleBracket = v == "1"
+		}
+	}
+	return st
+}
+
+func (s *Server) handleGetSettings(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, http.StatusOK, s.loadSettings(r.Context()))
+}
+
+// handleUpdateSettings merges the request over the current settings, so
+// partial updates ({"min_group_games": 5}) leave the other values untouched.
+func (s *Server) handleUpdateSettings(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	st := s.loadSettings(ctx)
+	if err := json.NewDecoder(r.Body).Decode(&st); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid settings")
+		return
+	}
+	switch {
+	case st.MinGroupGames < 3 || st.MinGroupGames > 10:
+		writeError(w, http.StatusBadRequest, "min_group_games must be between 3 and 10")
+		return
+	case st.NumGroups < 0 || st.NumGroups > 26:
+		writeError(w, http.StatusBadRequest, "num_groups must be between 1 and 26, or 0 for automatic")
+		return
+	case st.AdvancePerGroup < 1 || st.AdvancePerGroup > 8:
+		writeError(w, http.StatusBadRequest, "advance_per_group must be between 1 and 8")
+		return
+	}
+
+	singleBracket := "0"
+	if st.SingleBracket {
+		singleBracket = "1"
+	}
+	if err := s.withTx(ctx, func(tx *sql.Tx) error {
+		for k, v := range map[string]string{
+			"min_group_games":   strconv.Itoa(st.MinGroupGames),
+			"num_groups":        strconv.Itoa(st.NumGroups),
+			"advance_per_group": strconv.Itoa(st.AdvancePerGroup),
+			"single_bracket":    singleBracket,
+		} {
+			if _, err := tx.ExecContext(ctx, `
+				INSERT INTO settings (key, value) VALUES (?, ?)
+				ON CONFLICT(key) DO UPDATE SET value = excluded.value
+			`, k, v); err != nil {
+				return err
+			}
+		}
+		return nil
+	}); err != nil {
+		writeError(w, http.StatusInternalServerError, "save failed")
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// handleClearTournament resets the tournament to its freshly-imported state:
+// the draw, all results and the knockout are wiped, but the tournament and its
+// competitors (including local renames and removals) are kept, so the draw can
+// be run again without re-importing.
+func (s *Server) handleClearTournament(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	if err := s.withTx(ctx, func(tx *sql.Tx) error {
+		for _, stmt := range []string{
+			`DELETE FROM matches`,
+			`UPDATE competitors SET group_id = NULL, seed = NULL`,
+			`DELETE FROM groups`,
+			`UPDATE tournaments SET status = 'setup'`,
+		} {
+			if _, err := tx.ExecContext(ctx, stmt); err != nil {
+				return err
+			}
+		}
+		return nil
+	}); err != nil {
+		writeError(w, http.StatusInternalServerError, "reset failed: "+err.Error())
+		return
 	}
 	w.WriteHeader(http.StatusNoContent)
 }
@@ -270,6 +422,40 @@ func (s *Server) handleRestoreCompetitor(w http.ResponseWriter, r *http.Request)
 
 	if _, err := s.db.ExecContext(ctx, `UPDATE competitors SET removed = 0 WHERE id = ?`, id); err != nil {
 		writeError(w, http.StatusInternalServerError, "restore failed")
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// handleRenameCompetitor sets a competitor's display name, e.g. when their
+// ticket was bought under someone else's name. The name_edited flag marks the
+// local name as authoritative so a Ticket Tailor re-import won't overwrite it.
+func (s *Server) handleRenameCompetitor(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	id := r.PathValue("id")
+
+	var body struct {
+		Name string `json:"name"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	name := strings.TrimSpace(body.Name)
+	if name == "" {
+		writeError(w, http.StatusBadRequest, "name is required")
+		return
+	}
+
+	res, err := s.db.ExecContext(ctx, `
+		UPDATE competitors SET name = ?, name_edited = 1 WHERE id = ?
+	`, name, id)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "rename failed")
+		return
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		writeError(w, http.StatusNotFound, "competitor not found")
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
@@ -475,11 +661,36 @@ func (s *Server) handleUpdateMatch(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotFound, "match not found")
 		return
 	}
-	// A completed knockout match has already fed its winner into the next round;
-	// re-recording it with a different winner would fork the bracket below it.
+	// Completed matches can be corrected, but only while the correction cannot
+	// corrupt anything downstream:
+	//   - group results feed the knockout seeding, so they lock once the
+	//     tournament has advanced past the group stage;
+	//   - a knockout result locks once the next round's match has been played,
+	//     because its winner has already competed there.
 	if status == "complete" {
-		writeError(w, http.StatusConflict, "match result already recorded")
-		return
+		if stage == "group" {
+			var tStatus string
+			if err := s.db.QueryRowContext(ctx, `
+				SELECT status FROM tournaments WHERE id = ?
+			`, tournamentID).Scan(&tStatus); err != nil {
+				writeError(w, http.StatusInternalServerError, "query failed")
+				return
+			}
+			if tStatus != string(TournamentStatusGroupStage) {
+				writeError(w, http.StatusConflict, "group results are locked once the knockout stage has started")
+				return
+			}
+		} else if round != nil && position != nil && *round > 1 {
+			var parentStatus string
+			err := s.db.QueryRowContext(ctx, `
+				SELECT status FROM matches
+				WHERE tournament_id = ? AND stage = 'knockout' AND bracket IS ? AND round = ? AND position = ?
+			`, tournamentID, bracket, *round-1, *position/2).Scan(&parentStatus)
+			if err == nil && parentStatus == "complete" {
+				writeError(w, http.StatusConflict, "this result is locked: the next round has already been played")
+				return
+			}
+		}
 	}
 	if body.WinnerID != p1ID && body.WinnerID != p2ID {
 		writeError(w, http.StatusBadRequest, "winner_id must be one of the two players")
@@ -564,16 +775,14 @@ func groupName(i int) string {
 	return fmt.Sprintf("Group %c", 'A'+i)
 }
 
+// handleDraw runs the group draw. It takes no request parameters: how groups
+// are sized comes entirely from the persisted settings — a fixed group count
+// if the organiser set one, otherwise automatic sizing from the minimum
+// games-per-player target (groups of target+1, spilling any remainder into
+// bigger groups — when the numbers don't divide evenly, more games beats
+// fewer).
 func (s *Server) handleDraw(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
-
-	var body struct {
-		NumGroups int `json:"num_groups"`
-	}
-	json.NewDecoder(r.Body).Decode(&body)
-	if body.NumGroups < 2 || body.NumGroups > 26 {
-		body.NumGroups = 8
-	}
 
 	var tournamentID, status string
 	if err := s.db.QueryRowContext(ctx, `
@@ -616,37 +825,99 @@ func (s *Server) handleDraw(w http.ResponseWriter, r *http.Request) {
 	}
 
 	rows, err := s.db.QueryContext(ctx, `
-		SELECT id FROM competitors WHERE tournament_id = ? AND removed = 0
+		SELECT id, order_id FROM competitors WHERE tournament_id = ? AND removed = 0
 	`, tournamentID)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "query failed")
 		return
 	}
-	var competitorIDs []string
+	// Cluster competitors by purchase order: tickets bought together (friends,
+	// couples) must not land in the same group. Competitors without an order
+	// stand alone.
+	clusters := map[string][]string{}
+	var clusterKeys []string
+	total := 0
 	for rows.Next() {
 		var id string
-		if err := rows.Scan(&id); err != nil {
+		var orderID *string
+		if err := rows.Scan(&id, &orderID); err != nil {
 			rows.Close()
 			writeError(w, http.StatusInternalServerError, "scan failed")
 			return
 		}
-		competitorIDs = append(competitorIDs, id)
+		key := "solo:" + id
+		if orderID != nil && *orderID != "" {
+			key = "order:" + *orderID
+		}
+		if _, ok := clusters[key]; !ok {
+			clusterKeys = append(clusterKeys, key)
+		}
+		clusters[key] = append(clusters[key], id)
+		total++
 	}
 	rows.Close()
 
-	total := len(competitorIDs)
-	if total%body.NumGroups != 0 {
-		writeError(w, http.StatusBadRequest, fmt.Sprintf("%d competitors cannot be divided evenly into %d groups", total, body.NumGroups))
+	if total < 4 {
+		writeError(w, http.StatusBadRequest, "at least 4 competitors are required for a draw")
 		return
 	}
-	groupSize := total / body.NumGroups
+	maxCluster := 0
+	for _, key := range clusterKeys {
+		if n := len(clusters[key]); n > maxCluster {
+			maxCluster = n
+		}
+	}
 
-	mathrand.Shuffle(len(competitorIDs), func(i, j int) {
-		competitorIDs[i], competitorIDs[j] = competitorIDs[j], competitorIDs[i]
+	st := s.loadSettings(ctx)
+	numGroups := st.NumGroups
+	if numGroups == 0 {
+		// Automatic sizing from the games-per-player target. A fixed count
+		// gets no adjustment — the checks below reject it if it can't work.
+		numGroups = total / (st.MinGroupGames + 1)
+		if numGroups < 1 {
+			numGroups = 1
+		}
+		// A multi-ticket order needs at least as many groups as it has
+		// tickets; if that pushes group sizes below the minimum, the check
+		// below rejects.
+		if maxCluster > numGroups {
+			numGroups = maxCluster
+		}
+	}
+
+	// Groups of four are the hard minimum (three games each).
+	if total/numGroups < 4 {
+		writeError(w, http.StatusBadRequest, fmt.Sprintf("groups must have at least 4 players — %d competitors can make at most %d groups", total, total/4))
+		return
+	}
+	if maxCluster > numGroups {
+		writeError(w, http.StatusBadRequest, fmt.Sprintf("an order with %d tickets cannot be kept apart across only %d groups — use at least %d groups", maxCluster, numGroups, maxCluster))
+		return
+	}
+
+	// Shuffle the cluster order and each cluster's members, then flatten with
+	// order-mates kept consecutive and deal round-robin across the groups.
+	// Consecutive positions land in distinct groups, so competitors from the
+	// same order can never share one; the deal keeps group sizes within one of
+	// each other, with any remainder landing in the earlier groups.
+	mathrand.Shuffle(len(clusterKeys), func(i, j int) {
+		clusterKeys[i], clusterKeys[j] = clusterKeys[j], clusterKeys[i]
 	})
+	ordered := make([]string, 0, total)
+	for _, key := range clusterKeys {
+		members := clusters[key]
+		mathrand.Shuffle(len(members), func(i, j int) {
+			members[i], members[j] = members[j], members[i]
+		})
+		ordered = append(ordered, members...)
+	}
+	groupMembers := make([][]string, numGroups)
+	for i, id := range ordered {
+		groupMembers[i%numGroups] = append(groupMembers[i%numGroups], id)
+	}
 
 	if err := s.withTx(ctx, func(tx *sql.Tx) error {
-		for i := 0; i < body.NumGroups; i++ {
+		for i := 0; i < numGroups; i++ {
 			groupID := newID()
 			if _, err := tx.ExecContext(ctx, `
 				INSERT INTO groups (id, tournament_id, name) VALUES (?, ?, ?)
@@ -654,7 +925,7 @@ func (s *Server) handleDraw(w http.ResponseWriter, r *http.Request) {
 				return err
 			}
 
-			members := competitorIDs[i*groupSize : (i+1)*groupSize]
+			members := groupMembers[i]
 
 			for _, cID := range members {
 				if _, err := tx.ExecContext(ctx, `
@@ -692,8 +963,9 @@ func (s *Server) handleDraw(w http.ResponseWriter, r *http.Request) {
 }
 
 // defaultAdvanceCount is how many competitors advance from each group to the
-// knockout when the request doesn't specify a count. With the default two
-// brackets, the top half go to the main bracket and the rest to the consolation.
+// knockout when the organiser hasn't configured a count in settings. With the
+// default two brackets, the top half go to the main bracket and the rest to
+// the consolation.
 const defaultAdvanceCount = 4
 
 // nextPow2 returns the smallest power of two >= n.
@@ -875,14 +1147,11 @@ func (s *Server) createKnockoutBracket(ctx context.Context, tournamentID string,
 	return nil
 }
 
+// handleAdvance closes the group stage and seeds the knockout. It takes no
+// request parameters: how many advance per group and whether to split into
+// two brackets come from the persisted settings.
 func (s *Server) handleAdvance(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
-
-	var body struct {
-		AdvanceTotal  int  `json:"advance_total"`
-		SingleBracket bool `json:"single_bracket"`
-	}
-	json.NewDecoder(r.Body).Decode(&body)
 
 	var tournamentID string
 	if err := s.db.QueryRowContext(ctx, `
@@ -916,19 +1185,12 @@ func (s *Server) handleAdvance(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// advance_total is the total number of players progressing across all
-	// groups; each group contributes an equal share of its top finishers.
-	perGroup := defaultAdvanceCount
-	if body.AdvanceTotal > 0 {
-		if body.AdvanceTotal%len(groupIDs) != 0 {
-			writeError(w, http.StatusBadRequest, fmt.Sprintf("%d players cannot be split evenly across %d groups", body.AdvanceTotal, len(groupIDs)))
-			return
-		}
-		perGroup = body.AdvanceTotal / len(groupIDs)
-	}
+	// Each group contributes an equal share of its top finishers.
+	st := s.loadSettings(ctx)
+	perGroup, singleBracket := st.AdvancePerGroup, st.SingleBracket
 	// A second bracket needs at least one place per group feeding it.
 	numBrackets := 2
-	if body.SingleBracket || perGroup < 2 {
+	if singleBracket || perGroup < 2 {
 		numBrackets = 1
 	}
 

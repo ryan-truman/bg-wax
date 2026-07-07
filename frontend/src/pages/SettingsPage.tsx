@@ -1,7 +1,8 @@
 import { useState, useEffect } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { api } from '../api'
-import type { Tournament, TicketTailorEvent } from '../types'
+import type { Tournament, TicketTailorEvent, Settings } from '../types'
+import ConfirmDialog from '../components/ConfirmDialog'
 
 const LS_API_KEY = 'tt_api_key'
 const LS_EVENT_ID = 'tt_event_id'
@@ -15,16 +16,18 @@ interface Props {
 export default function SettingsPage({ tournament, onUpdate }: Props) {
   const navigate = useNavigate()
   const [showApiModal, setShowApiModal] = useState(false)
+  const [confirmReset, setConfirmReset] = useState(false)
 
   useEffect(() => {
     function onKey(e: KeyboardEvent) {
       if (e.key !== 'Escape') return
       if (showApiModal) setShowApiModal(false)
+      else if (confirmReset) return // ConfirmDialog closes itself on Escape
       else navigate('/')
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [navigate, showApiModal])
+  }, [navigate, showApiModal, confirmReset])
 
   const [apiKey, setApiKey] = useState(() => localStorage.getItem(LS_API_KEY) ?? '')
   const [eventId, setEventId] = useState(() => localStorage.getItem(LS_EVENT_ID) ?? '')
@@ -91,36 +94,23 @@ export default function SettingsPage({ tournament, onUpdate }: Props) {
   }
   const [importing, setImporting] = useState(false)
   const [clearing, setClearing] = useState(false)
-  const [drawing, setDrawing] = useState(false)
-  const [numGroups, setNumGroups] = useState(8)
-  const [advancing, setAdvancing] = useState(false)
-  const [groupCount, setGroupCount] = useState(0)
-  const [totalCompetitors, setTotalCompetitors] = useState(0)
-  const [advanceTotal, setAdvanceTotal] = useState(0)
-  const [singleBracket, setSingleBracket] = useState(false)
 
-  // True once any group match has a result — the point where redraw locks.
-  const [anyPlayed, setAnyPlayed] = useState(false)
-
-  // The advance counter is a total across all groups, stepping by the group
-  // count so every group contributes the same number of qualifiers.
+  // Organiser preferences, persisted server-side. This page only configures
+  // behaviour — the Run Draw and Advance to Knockout buttons that act on
+  // these settings live on the Match History page.
+  const [settings, setSettings] = useState<Settings>({
+    min_group_games: 4,
+    num_groups: 0,
+    advance_per_group: 4,
+    single_bracket: false,
+  })
   useEffect(() => {
-    if (tournament?.status !== 'group_stage') {
-      setAnyPlayed(false)
-      return
-    }
-    api.getGroups()
-      .then(gs => {
-        const total = gs.reduce((n, g) => n + g.competitors.length, 0)
-        setGroupCount(gs.length)
-        setTotalCompetitors(total)
-        setAdvanceTotal(t => t || Math.min(4, Math.floor(total / gs.length)) * gs.length)
-      })
-      .catch(() => {})
-    api.getMatches()
-      .then(ms => setAnyPlayed(ms.some(m => m.status !== 'pending')))
-      .catch(() => {})
-  }, [tournament?.status])
+    api.getSettings().then(setSettings).catch(() => {})
+  }, [])
+  function changeSettings(patch: Partial<Settings>) {
+    setSettings(s => ({ ...s, ...patch }))
+    api.updateSettings(patch).catch(() => {})
+  }
   const [message, setMessage] = useState<{ text: string; ok: boolean } | null>(null)
 
   function openApiModal() {
@@ -166,13 +156,12 @@ export default function SettingsPage({ tournament, onUpdate }: Props) {
   }
 
   async function handleClear() {
-    if (!confirm('This will delete all competitors, groups, and matches. Are you sure?')) return
     setClearing(true)
     setMessage(null)
     try {
       await api.clearTournament()
-      setMessage({ text: 'All data cleared.', ok: true })
-      onUpdate(null)
+      setMessage({ text: 'Tournament reset — competitors kept, ready for a new draw.', ok: true })
+      onUpdate(await api.getTournament().catch(() => null))
     } catch (e) {
       setMessage({ text: e instanceof Error ? e.message : 'Clear failed', ok: false })
     } finally {
@@ -180,44 +169,6 @@ export default function SettingsPage({ tournament, onUpdate }: Props) {
     }
   }
 
-  async function handleDraw() {
-    setDrawing(true)
-    setMessage(null)
-    try {
-      await api.runDraw(numGroups)
-      const t = await api.getTournament()
-      onUpdate(t)
-      // A redraw can change the group count, so recompute the advance
-      // default rather than keeping a stale total.
-      const gs = await api.getGroups()
-      const total = gs.reduce((n, g) => n + g.competitors.length, 0)
-      setGroupCount(gs.length)
-      setTotalCompetitors(total)
-      setAdvanceTotal(Math.min(4, Math.floor(total / gs.length)) * gs.length)
-    } catch (e) {
-      setMessage({ text: e instanceof Error ? e.message : 'Draw failed', ok: false })
-    } finally {
-      setDrawing(false)
-    }
-  }
-
-  async function handleAdvance() {
-    setAdvancing(true)
-    setMessage(null)
-    try {
-      await api.advance(advanceTotal, singleBracket)
-      const t = await api.getTournament()
-      onUpdate(t)
-    } catch (e) {
-      setMessage({ text: e instanceof Error ? e.message : 'Advance failed', ok: false })
-    } finally {
-      setAdvancing(false)
-    }
-  }
-
-  const isRedraw = tournament?.status === 'group_stage'
-  const canDraw = tournament?.status === 'setup' || (isRedraw && !anyPlayed)
-  const canAdvance = tournament?.status === 'group_stage'
   const canRefresh = !!apiKey && !!eventId && !importing
 
   return (
@@ -333,103 +284,119 @@ export default function SettingsPage({ tournament, onUpdate }: Props) {
         </div>
       )}
 
-      {/* Draw — only available before the draw has been run */}
-      {canDraw && (
-        <section className="space-y-4">
-          <h2 className="text-xs uppercase tracking-widest font-bold" style={{ color: '#888' }}>Group Draw</h2>
-          <p className="text-sm" style={{ color: '#888' }}>
-            {isRedraw
-              ? 'Re-randomizes the groups and regenerates all round-robin matches. Available until the first result is recorded.'
-              : 'Randomly assigns competitors to groups and generates all round-robin matches.'}
-          </p>
-          <div className="flex items-center gap-2">
-            <button
-              onClick={() => setNumGroups(n => Math.max(2, n - 1))}
-              disabled={drawing || numGroups <= 2}
-              className="w-8 h-8 flex items-center justify-center rounded border text-sm font-bold transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
-              style={{ borderColor: 'var(--color-border)', color: '#f0f0f0' }}
-            >
-              −
-            </button>
-            <span className="w-6 text-center text-sm tabular-nums" style={{ color: '#f0f0f0' }}>{numGroups}</span>
-            <button
-              onClick={() => setNumGroups(n => Math.min(26, n + 1))}
-              disabled={drawing || numGroups >= 26}
-              className="w-8 h-8 flex items-center justify-center rounded border text-sm font-bold transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
-              style={{ borderColor: 'var(--color-border)', color: '#f0f0f0' }}
-            >
-              +
-            </button>
-            <button
-              onClick={handleDraw}
-              disabled={drawing}
-              className="px-4 py-2 text-sm font-bold uppercase tracking-wide rounded border transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
-              style={{ borderColor: 'var(--color-border)', color: '#f0f0f0' }}
-            >
-              {drawing ? 'Running draw…' : isRedraw ? 'Redraw Groups' : 'Run Draw'}
-            </button>
-          </div>
-        </section>
-      )}
-
-      {/* Advance */}
-      {canAdvance && groupCount > 0 && (() => {
-        const perGroup = advanceTotal / groupCount
-        const mainTotal = Math.ceil(perGroup / 2) * groupCount
-        return (
-        <section className="space-y-4">
-          <h2 className="text-xs uppercase tracking-widest font-bold" style={{ color: '#888' }}>Advance to Knockout</h2>
-          <p className="text-sm" style={{ color: '#888' }}>
-            {singleBracket || perGroup < 2
-              ? `The top ${perGroup === 1 ? 'competitor' : `${perGroup} competitors`} from each group (${advanceTotal} total) will be seeded by score into a single knockout bracket.`
-              : `${mainTotal} players go to the Champion's League and ${advanceTotal - mainTotal} to the Europa League, taking the top ${perGroup} from each group. Seeding is by score, keeping group-mates apart for as long as possible.`}
-          </p>
-          <div className="flex items-center gap-2">
-            <button
-              onClick={() => setAdvanceTotal(n => Math.max(groupCount, n - groupCount))}
-              disabled={advancing || advanceTotal <= groupCount}
-              className="w-8 h-8 flex items-center justify-center rounded border text-sm font-bold transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
-              style={{ borderColor: 'var(--color-border)', color: '#f0f0f0' }}
-            >
-              −
-            </button>
-            <span className="w-8 text-center text-sm tabular-nums" style={{ color: '#f0f0f0' }}>{advanceTotal}</span>
-            <button
-              onClick={() => setAdvanceTotal(n => Math.min(totalCompetitors, n + groupCount))}
-              disabled={advancing || advanceTotal + groupCount > totalCompetitors}
-              className="w-8 h-8 flex items-center justify-center rounded border text-sm font-bold transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
-              style={{ borderColor: 'var(--color-border)', color: '#f0f0f0' }}
-            >
-              +
-            </button>
-            <span className="text-xs uppercase tracking-widest" style={{ color: '#666' }}>progress to knockout</span>
-          </div>
-          <label className="flex items-center gap-2 text-sm cursor-pointer select-none" style={{ color: '#f0f0f0' }}>
-            <input
-              type="checkbox"
-              checked={singleBracket}
-              onChange={e => setSingleBracket(e.target.checked)}
-              disabled={advancing}
-              className="w-4 h-4 accent-[var(--color-brand)]"
-            />
-            Single knockout bracket
-          </label>
+      {/* Draw configuration — the Run Draw button itself lives on Match History */}
+      <section className="space-y-4">
+        <h2 className="text-xs uppercase tracking-widest font-bold" style={{ color: '#888' }}>Group Draw</h2>
+        <div className="flex items-center gap-2">
           <button
-            onClick={handleAdvance}
-            disabled={advancing}
-            className="px-4 py-2 text-sm font-bold uppercase tracking-wide rounded transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
-            style={{ backgroundColor: 'var(--color-brand)', color: '#fff' }}
+            onClick={() => changeSettings({ min_group_games: Math.max(3, settings.min_group_games - 1) })}
+            disabled={settings.min_group_games <= 3}
+            className="w-8 h-8 flex items-center justify-center rounded border text-sm font-bold transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+            style={{ borderColor: 'var(--color-border)', color: '#f0f0f0' }}
           >
-            {advancing ? 'Advancing…' : 'Advance to Knockout'}
+            −
           </button>
-        </section>
-        )
-      })()}
+          <span className="w-8 text-center text-sm tabular-nums" style={{ color: '#f0f0f0' }}>{settings.min_group_games}</span>
+          <button
+            onClick={() => changeSettings({ min_group_games: Math.min(10, settings.min_group_games + 1) })}
+            disabled={settings.min_group_games >= 10}
+            className="w-8 h-8 flex items-center justify-center rounded border text-sm font-bold transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+            style={{ borderColor: 'var(--color-border)', color: '#f0f0f0' }}
+          >
+            +
+          </button>
+          <span className="text-xs uppercase tracking-widest" style={{ color: '#666' }}>group games per player</span>
+        </div>
+        <p className="text-xs" style={{ color: '#888' }}>
+          A minimum: the draw makes groups of {settings.min_group_games + 1}. When the numbers don't
+          split evenly, the leftovers make some groups one player bigger — an extra game, never fewer.
+        </p>
+        {settings.num_groups === 0 ? (
+          <p className="text-xs" style={{ color: '#888' }}>
+            Group count is automatic.{' '}
+            <button onClick={() => changeSettings({ num_groups: 8 })} className="underline" style={{ color: '#aaa' }}>
+              Set a fixed count
+            </button>
+          </p>
+        ) : (
+          <div className="flex items-center gap-2">
+            <button
+              onClick={() => changeSettings({ num_groups: Math.max(2, settings.num_groups - 1) })}
+              disabled={settings.num_groups <= 2}
+              className="w-8 h-8 flex items-center justify-center rounded border text-sm font-bold transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+              style={{ borderColor: 'var(--color-border)', color: '#f0f0f0' }}
+            >
+              −
+            </button>
+            <span className="w-8 text-center text-sm tabular-nums" style={{ color: '#f0f0f0' }}>{settings.num_groups}</span>
+            <button
+              onClick={() => changeSettings({ num_groups: Math.min(26, settings.num_groups + 1) })}
+              disabled={settings.num_groups >= 26}
+              className="w-8 h-8 flex items-center justify-center rounded border text-sm font-bold transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+              style={{ borderColor: 'var(--color-border)', color: '#f0f0f0' }}
+            >
+              +
+            </button>
+            <span className="text-xs uppercase tracking-widest" style={{ color: '#666' }}>groups (fixed)</span>
+            <button onClick={() => changeSettings({ num_groups: 0 })} className="text-xs underline" style={{ color: '#aaa' }}>
+              Back to automatic
+            </button>
+          </div>
+        )}
+      </section>
+
+      {/* Knockout configuration — the Advance button lives on Match History */}
+      <section className="space-y-4">
+        <h2 className="text-xs uppercase tracking-widest font-bold" style={{ color: '#888' }}>Knockout</h2>
+        <p className="text-sm" style={{ color: '#888' }}>
+          {settings.single_bracket || settings.advance_per_group < 2
+            ? `The top ${settings.advance_per_group === 1 ? 'competitor' : `${settings.advance_per_group} competitors`} from each group advance, seeded by score into a single knockout bracket.`
+            : `The top ${settings.advance_per_group} from each group advance: the top half go to the Champion's League, the rest to the Europa League. Seeding is by score, keeping group-mates apart for as long as possible.`}
+        </p>
+        <div className="flex items-center gap-2">
+          <button
+            onClick={() => changeSettings({ advance_per_group: Math.max(1, settings.advance_per_group - 1) })}
+            disabled={settings.advance_per_group <= 1}
+            className="w-8 h-8 flex items-center justify-center rounded border text-sm font-bold transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+            style={{ borderColor: 'var(--color-border)', color: '#f0f0f0' }}
+          >
+            −
+          </button>
+          <span className="w-8 text-center text-sm tabular-nums" style={{ color: '#f0f0f0' }}>{settings.advance_per_group}</span>
+          <button
+            onClick={() => changeSettings({ advance_per_group: Math.min(8, settings.advance_per_group + 1) })}
+            disabled={settings.advance_per_group >= 8}
+            className="w-8 h-8 flex items-center justify-center rounded border text-sm font-bold transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+            style={{ borderColor: 'var(--color-border)', color: '#f0f0f0' }}
+          >
+            +
+          </button>
+          <span className="text-xs uppercase tracking-widest" style={{ color: '#666' }}>advance per group</span>
+        </div>
+        <label className="flex items-center gap-3 text-sm cursor-pointer select-none" style={{ color: '#f0f0f0' }}>
+          <input
+            type="checkbox"
+            checked={settings.single_bracket}
+            onChange={e => changeSettings({ single_bracket: e.target.checked })}
+            className="sr-only peer"
+          />
+          <span
+            className="relative w-9 h-5 rounded-full transition-colors shrink-0 peer-focus-visible:ring-2"
+            style={{ backgroundColor: settings.single_bracket ? 'var(--color-brand)' : 'var(--color-border)' }}
+          >
+            <span
+              className="absolute top-0.5 left-0.5 w-4 h-4 rounded-full transition-transform"
+              style={{ backgroundColor: '#f0f0f0', transform: settings.single_bracket ? 'translateX(16px)' : 'translateX(0)' }}
+            />
+          </span>
+          Single knockout bracket
+        </label>
+      </section>
 
       {/* Reset — destructive, kept at the bottom away from the routine actions */}
       <section className="pt-6 border-t" style={{ borderColor: 'var(--color-border)' }}>
         <button
-          onClick={handleClear}
+          onClick={() => setConfirmReset(true)}
           disabled={clearing || !tournament}
           className="px-4 py-2 text-sm font-bold uppercase tracking-wide rounded border transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
           style={{ borderColor: 'rgba(232,20,46,0.5)', color: 'var(--color-wax-red)' }}
@@ -437,6 +404,17 @@ export default function SettingsPage({ tournament, onUpdate }: Props) {
           {clearing ? 'Resetting…' : 'Reset Tournament'}
         </button>
       </section>
+
+      {confirmReset && (
+        <ConfirmDialog
+          title="Reset Tournament"
+          message="This will delete the draw and all recorded results. Competitors are kept."
+          confirmLabel="Reset"
+          danger
+          onCancel={() => setConfirmReset(false)}
+          onConfirm={() => { setConfirmReset(false); handleClear() }}
+        />
+      )}
 
     </div>
   )

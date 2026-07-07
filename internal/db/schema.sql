@@ -6,7 +6,8 @@ CREATE TABLE IF NOT EXISTS tournaments (
     created_at  DATETIME DEFAULT CURRENT_TIMESTAMP
 );
 -- status values: 'setup' | 'group_stage' | 'knockout' | 'complete'
--- config_json shape: { "group_size": 5, "advance_count": 2, "ticket_tailor_event_id": "..." }
+-- config_json is unused: organiser preferences live in the settings table,
+-- which survives re-imports (this row is replaced wholesale on import).
 
 CREATE TABLE IF NOT EXISTS competitors (
     id                TEXT PRIMARY KEY,
@@ -14,9 +15,11 @@ CREATE TABLE IF NOT EXISTS competitors (
     name              TEXT NOT NULL,
     email             TEXT,
     ticket_tailor_id  TEXT,
+    order_id          TEXT,  -- Ticket Tailor order; tickets bought together share one, and the draw keeps them in different groups
     seed              INTEGER,
     group_id          TEXT REFERENCES groups(id),
     removed           INTEGER NOT NULL DEFAULT 0,
+    name_edited       INTEGER NOT NULL DEFAULT 0,  -- renamed in-app; the local name wins over the ticket's on re-import
     created_at        DATETIME DEFAULT CURRENT_TIMESTAMP
 );
 
@@ -43,3 +46,10 @@ CREATE TABLE IF NOT EXISTS matches (
     created_at    DATETIME DEFAULT CURRENT_TIMESTAMP
 );
 -- status values: 'pending' | 'in_progress' | 'complete'
+
+-- Organiser preferences that persist across sessions (e.g. the target number
+-- of group-stage games per player). One row per setting, keyed by name.
+CREATE TABLE IF NOT EXISTS settings (
+    key   TEXT PRIMARY KEY,
+    value TEXT NOT NULL
+);
