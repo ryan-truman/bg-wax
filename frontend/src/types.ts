@@ -87,6 +87,7 @@ export interface Match {
   id: string;
   stage: MatchStage;
   group_id: string | null;
+  group_name: string | null;
   bracket: number /* int */ | null;
   round: number /* int */ | null;
   position: number /* int */ | null;
@@ -115,15 +116,17 @@ export interface TicketTailorEvent {
  * minimum: the automatic draw sizes groups at MinGroupGames+1 players, and
  * when the numbers don't divide evenly the remainder makes some groups one
  * player bigger — an extra game, never a shortfall. NumGroups overrides the
- * automatic sizing with a fixed group count (0 = automatic). AdvancePerGroup
- * is how many top finishers each group sends to the knockout. SingleBracket
- * puts all qualifiers in one bracket instead of splitting into Champion's and
- * Europa leagues.
+ * automatic sizing with a fixed group count (0 = automatic). AdvanceTotal is
+ * how many finishers advance into each knockout bracket in total: the top
+ * places from every group qualify, and the best of the next-place finishers
+ * fill any remainder (e.g. 16 from 6 groups = top 2 each + the 4 best thirds).
+ * SingleBracket puts all qualifiers in one bracket instead of splitting into
+ * Champion's and Europa leagues.
  */
 export interface Settings {
   min_group_games: number /* int */;
   num_groups: number /* int */;
-  advance_per_group: number /* int */;
+  advance_total: number /* int */;
   single_bracket: boolean;
 }
 /**

@@ -101,7 +101,7 @@ export default function SettingsPage({ tournament, onUpdate }: Props) {
   const [settings, setSettings] = useState<Settings>({
     min_group_games: 4,
     num_groups: 0,
-    advance_per_group: 4,
+    advance_total: 16,
     single_bracket: false,
   })
   useEffect(() => {
@@ -349,29 +349,29 @@ export default function SettingsPage({ tournament, onUpdate }: Props) {
       <section className="space-y-4">
         <h2 className="text-xs uppercase tracking-widest font-bold" style={{ color: '#888' }}>Knockout</h2>
         <p className="text-sm" style={{ color: '#888' }}>
-          {settings.single_bracket || settings.advance_per_group < 2
-            ? `The top ${settings.advance_per_group === 1 ? 'competitor' : `${settings.advance_per_group} competitors`} from each group advance, seeded by score into a single knockout bracket.`
-            : `The top ${settings.advance_per_group} from each group advance: the top half go to the Champion's League, the rest to the Europa League. Seeding is by score, keeping group-mates apart for as long as possible.`}
+          {settings.single_bracket
+            ? `The top ${settings.advance_total} finishers advance into a single knockout bracket. Each group sends its top places, and the best of the next-place finishers fill any remainder.`
+            : `The top ${settings.advance_total} finishers advance into each of two brackets — the Champion's League, then the Europa League below it. Each group sends its top places, with the best of the next-place finishers filling any remainder. Seeding keeps group-mates apart for as long as possible.`}
         </p>
         <div className="flex items-center gap-2">
           <button
-            onClick={() => changeSettings({ advance_per_group: Math.max(1, settings.advance_per_group - 1) })}
-            disabled={settings.advance_per_group <= 1}
+            onClick={() => changeSettings({ advance_total: Math.max(8, settings.advance_total - 1) })}
+            disabled={settings.advance_total <= 8}
             className="w-8 h-8 flex items-center justify-center rounded border text-sm font-bold transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
             style={{ borderColor: 'var(--color-border)', color: '#f0f0f0' }}
           >
             −
           </button>
-          <span className="w-8 text-center text-sm tabular-nums" style={{ color: '#f0f0f0' }}>{settings.advance_per_group}</span>
+          <span className="w-8 text-center text-sm tabular-nums" style={{ color: '#f0f0f0' }}>{settings.advance_total}</span>
           <button
-            onClick={() => changeSettings({ advance_per_group: Math.min(8, settings.advance_per_group + 1) })}
-            disabled={settings.advance_per_group >= 8}
+            onClick={() => changeSettings({ advance_total: Math.min(16, settings.advance_total + 1) })}
+            disabled={settings.advance_total >= 16}
             className="w-8 h-8 flex items-center justify-center rounded border text-sm font-bold transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
             style={{ borderColor: 'var(--color-border)', color: '#f0f0f0' }}
           >
             +
           </button>
-          <span className="text-xs uppercase tracking-widest" style={{ color: '#666' }}>advance per group</span>
+          <span className="text-xs uppercase tracking-widest" style={{ color: '#666' }}>players per bracket</span>
         </div>
         <label className="flex items-center gap-3 text-sm cursor-pointer select-none" style={{ color: '#f0f0f0' }}>
           <input

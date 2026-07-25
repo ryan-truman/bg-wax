@@ -1,8 +1,13 @@
 set dotenv-load
 
-# Seed 40 fake competitors and start the server using an isolated demo database.
-# The frontend rebuilds automatically while the server runs — refresh the
-# browser to see changes. (Watch mode skips type checking; `just release` runs it.)
+# Show the available commands (runs when you type `just` with no arguments).
+default:
+    @just --list
+
+# The frontend rebuilds automatically while the server runs — refresh the browser
+# to see changes. (Watch mode skips type checking; `just release` runs it.)
+
+# Develop against mock data on an isolated demo.db (40 fake competitors).
 demo:
     #!/usr/bin/env bash
     set -euo pipefail
@@ -17,18 +22,17 @@ demo:
 serve:
     go run ./cmd/server
 
-# Regenerate frontend/src/types.ts from the Go API structs in internal/api.
-# Run this after changing any response type so the TypeScript stays in sync.
+# Run this after changing any API response type so the TypeScript stays in sync.
+
+# Regenerate frontend/src/types.ts from the Go API structs (via tygo).
 types:
     go run github.com/gzuidhof/tygo@v0.2.21 generate
 
-# Build and package macOS binaries for distribution
+# Build and package the macOS (Apple Silicon) binary for distribution
 release: types
     cd frontend && npm run build
-    GOOS=darwin GOARCH=amd64 go build -o dist/backgammon-amd64 ./cmd/server
-    GOOS=darwin GOARCH=arm64 go build -o dist/backgammon-arm64 ./cmd/server
-    zip -j dist/backgammon-mac-intel.zip dist/backgammon-amd64
-    zip -j dist/backgammon-mac-apple-silicon.zip dist/backgammon-arm64
+    GOOS=darwin GOARCH=arm64 go build -o dist/bgandw ./cmd/server
+    zip -j dist/bgandw dist/bgandw
 
 # Install frontend dependencies (once after cloning)
 setup:

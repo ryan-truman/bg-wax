@@ -28,7 +28,7 @@ func TestMinGroupGamesSetting(t *testing.T) {
 	if got := getMinGames(); got != 4 {
 		t.Fatalf("default min_group_games = %d, want 4", got)
 	}
-	for _, bad := range []string{`{"min_group_games":2}`, `{"min_group_games":11}`, `{"num_groups":27}`, `{"advance_per_group":0}`} {
+	for _, bad := range []string{`{"min_group_games":2}`, `{"min_group_games":11}`, `{"num_groups":27}`, `{"advance_total":1}`, `{"advance_total":17}`} {
 		if rec := do(t, s, "PUT", "/api/settings", bad); rec.Code != http.StatusBadRequest {
 			t.Fatalf("PUT %s: got %d, want 400", bad, rec.Code)
 		}
@@ -86,15 +86,15 @@ func TestAdvanceUsesSettings(t *testing.T) {
 		}
 	}
 
-	if rec := do(t, s, "PUT", "/api/settings", `{"advance_per_group":1,"single_bracket":true}`); rec.Code != http.StatusNoContent {
+	if rec := do(t, s, "PUT", "/api/settings", `{"advance_total":4,"single_bracket":true}`); rec.Code != http.StatusNoContent {
 		t.Fatalf("save settings: got %d: %s", rec.Code, rec.Body)
 	}
 	if rec := do(t, s, "POST", "/api/tournament/advance", ""); rec.Code != http.StatusNoContent {
 		t.Fatalf("advance from settings: got %d: %s", rec.Code, rec.Body)
 	}
 
-	// Top 1 of each of 4 groups in a single bracket: 2 semis + 1 final, all
-	// in bracket 1.
+	// A total of 4 across 4 groups is one each, in a single bracket: 2 semis +
+	// 1 final, all in bracket 1.
 	bracket := listBracket(t, s)
 	if len(bracket) != 3 {
 		t.Fatalf("knockout matches = %d, want 3 (2 semis + final)", len(bracket))

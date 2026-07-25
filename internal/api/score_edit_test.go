@@ -75,7 +75,7 @@ func TestEditCompletedScores(t *testing.T) {
 			}
 		}
 	}
-	putSettings(t, s, `{"advance_per_group":1,"single_bracket":true}`)
+	putSettings(t, s, `{"advance_total":4,"single_bracket":true}`)
 	if rec := do(t, s, "POST", "/api/tournament/advance", ""); rec.Code != http.StatusNoContent {
 		t.Fatalf("advance: got %d: %s", rec.Code, rec.Body)
 	}

@@ -258,10 +258,10 @@ const defaultMinGroupGames = 4
 // out-of-range value falling back to its default.
 func (s *Server) loadSettings(ctx context.Context) Settings {
 	st := Settings{
-		MinGroupGames:   defaultMinGroupGames,
-		NumGroups:       0, // automatic
-		AdvancePerGroup: defaultAdvanceCount,
-		SingleBracket:   false,
+		MinGroupGames: defaultMinGroupGames,
+		NumGroups:     0, // automatic
+		AdvanceTotal:  defaultAdvanceTotal,
+		SingleBracket: false,
 	}
 	rows, err := s.db.QueryContext(ctx, `SELECT key, value FROM settings`)
 	if err != nil {
@@ -282,9 +282,9 @@ func (s *Server) loadSettings(ctx context.Context) Settings {
 			if n, err := strconv.Atoi(v); err == nil && n >= 0 && n <= 26 {
 				st.NumGroups = n
 			}
-		case "advance_per_group":
-			if n, err := strconv.Atoi(v); err == nil && n >= 1 && n <= 8 {
-				st.AdvancePerGroup = n
+		case "advance_total":
+			if n, err := strconv.Atoi(v); err == nil && n >= minAdvanceTotal && n <= maxAdvanceTotal {
+				st.AdvanceTotal = n
 			}
 		case "single_bracket":
 			st.SingleBracket = v == "1"
@@ -313,8 +313,8 @@ func (s *Server) handleUpdateSettings(w http.ResponseWriter, r *http.Request) {
 	case st.NumGroups < 0 || st.NumGroups > 26:
 		writeError(w, http.StatusBadRequest, "num_groups must be between 1 and 26, or 0 for automatic")
 		return
-	case st.AdvancePerGroup < 1 || st.AdvancePerGroup > 8:
-		writeError(w, http.StatusBadRequest, "advance_per_group must be between 1 and 8")
+	case st.AdvanceTotal < minAdvanceTotal || st.AdvanceTotal > maxAdvanceTotal:
+		writeError(w, http.StatusBadRequest, fmt.Sprintf("advance_total must be between %d and %d", minAdvanceTotal, maxAdvanceTotal))
 		return
 	}
 
@@ -324,10 +324,10 @@ func (s *Server) handleUpdateSettings(w http.ResponseWriter, r *http.Request) {
 	}
 	if err := s.withTx(ctx, func(tx *sql.Tx) error {
 		for k, v := range map[string]string{
-			"min_group_games":   strconv.Itoa(st.MinGroupGames),
-			"num_groups":        strconv.Itoa(st.NumGroups),
-			"advance_per_group": strconv.Itoa(st.AdvancePerGroup),
-			"single_bracket":    singleBracket,
+			"min_group_games": strconv.Itoa(st.MinGroupGames),
+			"num_groups":      strconv.Itoa(st.NumGroups),
+			"advance_total":   strconv.Itoa(st.AdvanceTotal),
+			"single_bracket":  singleBracket,
 		} {
 			if _, err := tx.ExecContext(ctx, `
 				INSERT INTO settings (key, value) VALUES (?, ?)
@@ -377,13 +377,20 @@ func (s *Server) handleDeleteCompetitor(w http.ResponseWriter, r *http.Request) 
 	ctx := r.Context()
 	id := r.PathValue("id")
 
-	var exists int
-	if err := s.db.QueryRowContext(ctx, `SELECT 1 FROM competitors WHERE id = ?`, id).Scan(&exists); err != nil {
+	var tournamentID string
+	if err := s.db.QueryRowContext(ctx, `SELECT tournament_id FROM competitors WHERE id = ?`, id).Scan(&tournamentID); err != nil {
 		writeError(w, http.StatusNotFound, "competitor not found")
 		return
 	}
 
-	if _, err := s.db.ExecContext(ctx, `UPDATE competitors SET removed = 1 WHERE id = ?`, id); err != nil {
+	if err := s.withTx(ctx, func(tx *sql.Tx) error {
+		if _, err := tx.ExecContext(ctx, `UPDATE competitors SET removed = 1 WHERE id = ?`, id); err != nil {
+			return err
+		}
+		// If they were mid-knockout, their opponent walks over so the bracket
+		// can still reach a final.
+		return resolveKnockoutWalkovers(ctx, tx, tournamentID)
+	}); err != nil {
 		writeError(w, http.StatusInternalServerError, "remove failed")
 		return
 	}
@@ -602,16 +609,17 @@ func (s *Server) handleListMatches(w http.ResponseWriter, r *http.Request) {
 
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT
-			m.id, m.stage, m.group_id, m.bracket, m.round, m.position,
+			m.id, m.stage, m.group_id, g.name, m.bracket, m.round, m.position,
 			m.player1_id, p1.name, m.player2_id, p2.name,
 			m.winner_id, m.player1_score, m.player2_score, m.status
 		FROM matches m
 		LEFT JOIN competitors p1 ON p1.id = m.player1_id
 		LEFT JOIN competitors p2 ON p2.id = m.player2_id
+		LEFT JOIN groups g ON g.id = m.group_id
 		WHERE m.tournament_id = (SELECT id FROM tournaments ORDER BY created_at DESC LIMIT 1)
 		  AND m.player1_id IS NOT NULL AND m.player2_id IS NOT NULL
 		  AND p1.removed = 0 AND p2.removed = 0
-		ORDER BY m.stage, m.group_id, m.round, m.position
+		ORDER BY m.stage, g.name, m.round, m.position
 	`)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "query failed")
@@ -623,7 +631,7 @@ func (s *Server) handleListMatches(w http.ResponseWriter, r *http.Request) {
 	for rows.Next() {
 		var m Match
 		if err := rows.Scan(
-			&m.ID, &m.Stage, &m.GroupID, &m.Bracket, &m.Round, &m.Position,
+			&m.ID, &m.Stage, &m.GroupID, &m.GroupName, &m.Bracket, &m.Round, &m.Position,
 			&m.Player1ID, &m.Player1Name, &m.Player2ID, &m.Player2Name,
 			&m.WinnerID, &m.Player1Score, &m.Player2Score, &m.Status,
 		); err != nil {
@@ -633,6 +641,72 @@ func (s *Server) handleListMatches(w http.ResponseWriter, r *http.Request) {
 		matches = append(matches, m)
 	}
 	writeJSON(w, http.StatusOK, matches)
+}
+
+// resolveKnockoutWalkovers advances any player whose knockout opponent has been
+// removed from the tournament. A removed competitor is treated as absent at
+// whatever bracket slot they occupy: the opponent wins by walkover (no score)
+// and is pushed into the next round, cascading round by round so the bracket
+// can still reach a final. Matches where the opponent isn't known yet (a TBD
+// slot awaiting a feeder result) are left alone — they resolve once that feeder
+// fills the slot and this runs again.
+func resolveKnockoutWalkovers(ctx context.Context, tx *sql.Tx, tournamentID string) error {
+	for {
+		var id string
+		var bracket, round, position int
+		var winnerID string
+		err := tx.QueryRowContext(ctx, `
+			SELECT m.id, m.bracket, m.round, m.position,
+			       CASE WHEN c1.removed = 1 THEN m.player2_id ELSE m.player1_id END
+			FROM matches m
+			JOIN competitors c1 ON c1.id = m.player1_id
+			JOIN competitors c2 ON c2.id = m.player2_id
+			WHERE m.tournament_id = ? AND m.stage = 'knockout' AND m.status != 'complete'
+			  AND c1.removed <> c2.removed
+			LIMIT 1
+		`, tournamentID).Scan(&id, &bracket, &round, &position, &winnerID)
+		if err == sql.ErrNoRows {
+			break
+		}
+		if err != nil {
+			return err
+		}
+
+		if _, err := tx.ExecContext(ctx, `
+			UPDATE matches SET winner_id = ?, status = 'complete' WHERE id = ?
+		`, winnerID, id); err != nil {
+			return err
+		}
+		if round > 1 {
+			col := "player1_id"
+			if position%2 == 1 {
+				col = "player2_id"
+			}
+			if _, err := tx.ExecContext(ctx, fmt.Sprintf(`
+				UPDATE matches SET %s = ?
+				WHERE tournament_id = ? AND stage = 'knockout' AND bracket = ? AND round = ? AND position = ?
+			`, col), winnerID, tournamentID, bracket, round-1, position/2); err != nil {
+				return err
+			}
+		}
+	}
+
+	// If the walkovers decided every final, the tournament is over.
+	var unfinishedFinals int
+	if err := tx.QueryRowContext(ctx, `
+		SELECT COUNT(*) FROM matches
+		WHERE tournament_id = ? AND stage = 'knockout' AND round = 1 AND status != 'complete'
+	`, tournamentID).Scan(&unfinishedFinals); err != nil {
+		return err
+	}
+	if unfinishedFinals == 0 {
+		if _, err := tx.ExecContext(ctx, `
+			UPDATE tournaments SET status = 'complete' WHERE id = ? AND status = 'knockout'
+		`, tournamentID); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (s *Server) handleUpdateMatch(w http.ResponseWriter, r *http.Request) {
@@ -740,6 +814,9 @@ func (s *Server) handleUpdateMatch(w http.ResponseWriter, r *http.Request) {
 					}
 				}
 			}
+			// The winner may have just landed opposite a removed player; let any
+			// resulting walkover cascade forward.
+			return resolveKnockoutWalkovers(ctx, tx, tournamentID)
 		}
 		return nil
 	}); err != nil {
@@ -962,11 +1039,14 @@ func (s *Server) handleDraw(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
-// defaultAdvanceCount is how many competitors advance from each group to the
-// knockout when the organiser hasn't configured a count in settings. With the
-// default two brackets, the top half go to the main bracket and the rest to
-// the consolation.
-const defaultAdvanceCount = 4
+// advance-total bounds and default: how many finishers fill each knockout
+// bracket. The organiser picks a total (8–16 in the UI); the backend keeps a
+// slightly wider floor so small tournaments and tests can form tiny brackets.
+const (
+	minAdvanceTotal     = 2
+	maxAdvanceTotal     = 16
+	defaultAdvanceTotal = 16
+)
 
 // nextPow2 returns the smallest power of two >= n.
 func nextPow2(n int) int {
@@ -1147,9 +1227,55 @@ func (s *Server) createKnockoutBracket(ctx context.Context, tournamentID string,
 	return nil
 }
 
+// pickTier selects the next bracket's worth of qualifiers — `target` players in
+// total — from the group standings. A base number qualify from every group
+// (target ÷ groups), then the best of the next-place finishers across the
+// groups fill the remainder (the "best runners-up" rule). `taken` records how
+// many places each group has already given to earlier brackets and is advanced
+// as places are used, so calling pickTier again peels off the next tier down.
+func pickTier(standings map[string][]CompetitorStanding, groupIDs []string, taken map[string]int, target int) []qualifier {
+	base := target / len(groupIDs)
+	rem := target % len(groupIDs)
+
+	var picks []qualifier
+	take := func(gid string) {
+		s := standings[gid][taken[gid]]
+		picks = append(picks, qualifier{s.ID, gid, s.Points, s.Won})
+		taken[gid]++
+	}
+
+	// The guaranteed slice from every group.
+	for _, gid := range groupIDs {
+		for i := 0; i < base && taken[gid] < len(standings[gid]); i++ {
+			take(gid)
+		}
+	}
+
+	// The best of each group's next-place finishers fill the leftover slots.
+	if rem > 0 {
+		pool := make([]string, 0, len(groupIDs))
+		for _, gid := range groupIDs {
+			if taken[gid] < len(standings[gid]) {
+				pool = append(pool, gid)
+			}
+		}
+		sort.SliceStable(pool, func(i, j int) bool {
+			a, b := standings[pool[i]][taken[pool[i]]], standings[pool[j]][taken[pool[j]]]
+			if a.Points != b.Points {
+				return a.Points > b.Points
+			}
+			return a.Won > b.Won
+		})
+		for i := 0; i < rem && i < len(pool); i++ {
+			take(pool[i])
+		}
+	}
+	return picks
+}
+
 // handleAdvance closes the group stage and seeds the knockout. It takes no
-// request parameters: how many advance per group and whether to split into
-// two brackets come from the persisted settings.
+// request parameters: how many advance and whether to split into two brackets
+// come from the persisted settings.
 func (s *Server) handleAdvance(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 
@@ -1185,35 +1311,28 @@ func (s *Server) handleAdvance(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Each group contributes an equal share of its top finishers.
 	st := s.loadSettings(ctx)
-	perGroup, singleBracket := st.AdvancePerGroup, st.SingleBracket
-	// A second bracket needs at least one place per group feeding it.
 	numBrackets := 2
-	if singleBracket || perGroup < 2 {
+	if st.SingleBracket {
 		numBrackets = 1
 	}
 
-	// Split each group's qualifiers between brackets: the top half of the
-	// advancing places go to the main bracket, the rest to the consolation.
-	mainPlaces := perGroup
-	if numBrackets == 2 {
-		mainPlaces = (perGroup + 1) / 2
-	}
-	brackets := make([][]qualifier, numBrackets)
+	// Load each group's standings once, then peel off one bracket's worth of
+	// qualifiers at a time: the main bracket takes the top tier, the consolation
+	// the next.
+	standings := map[string][]CompetitorStanding{}
 	for _, gid := range groupIDs {
-		standings, err := s.groupStandings(ctx, gid)
+		list, err := s.groupStandings(ctx, gid)
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, "standings failed")
 			return
 		}
-		for place := 0; place < perGroup && place < len(standings); place++ {
-			b := 0
-			if place >= mainPlaces {
-				b = 1
-			}
-			brackets[b] = append(brackets[b], qualifier{standings[place].ID, gid, standings[place].Points, standings[place].Won})
-		}
+		standings[gid] = list
+	}
+	taken := map[string]int{}
+	brackets := make([][]qualifier, numBrackets)
+	for bi := range brackets {
+		brackets[bi] = pickTier(standings, groupIDs, taken, st.AdvanceTotal)
 	}
 
 	for bi, quals := range brackets {

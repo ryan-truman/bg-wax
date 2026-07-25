@@ -88,6 +88,7 @@ type Match struct {
 	ID           string      `json:"id"`
 	Stage        MatchStage  `json:"stage"`
 	GroupID      *string     `json:"group_id"`
+	GroupName    *string     `json:"group_name"`
 	Bracket      *int        `json:"bracket"`
 	Round        *int        `json:"round"`
 	Position     *int        `json:"position"`
@@ -116,15 +117,17 @@ type TicketTailorEvent struct {
 // minimum: the automatic draw sizes groups at MinGroupGames+1 players, and
 // when the numbers don't divide evenly the remainder makes some groups one
 // player bigger — an extra game, never a shortfall. NumGroups overrides the
-// automatic sizing with a fixed group count (0 = automatic). AdvancePerGroup
-// is how many top finishers each group sends to the knockout. SingleBracket
-// puts all qualifiers in one bracket instead of splitting into Champion's and
-// Europa leagues.
+// automatic sizing with a fixed group count (0 = automatic). AdvanceTotal is
+// how many finishers advance into each knockout bracket in total: the top
+// places from every group qualify, and the best of the next-place finishers
+// fill any remainder (e.g. 16 from 6 groups = top 2 each + the 4 best thirds).
+// SingleBracket puts all qualifiers in one bracket instead of splitting into
+// Champion's and Europa leagues.
 type Settings struct {
-	MinGroupGames   int  `json:"min_group_games"`
-	NumGroups       int  `json:"num_groups"`
-	AdvancePerGroup int  `json:"advance_per_group"`
-	SingleBracket   bool `json:"single_bracket"`
+	MinGroupGames int  `json:"min_group_games"`
+	NumGroups     int  `json:"num_groups"`
+	AdvanceTotal  int  `json:"advance_total"`
+	SingleBracket bool `json:"single_bracket"`
 }
 
 // Config reports server-side runtime flags the frontend adapts to. Demo is

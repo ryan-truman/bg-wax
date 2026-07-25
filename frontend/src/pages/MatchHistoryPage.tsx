@@ -113,6 +113,13 @@ export default function MatchHistoryPage({ tournament, onUpdate }: Props) {
   const inGroupStage = tournament?.status === 'group_stage'
   const canRedraw = inGroupStage && matches.every(m => m.status === 'pending')
 
+  // Finished matches from both stages share one Completed section. A group game
+  // counts as finished once the knockout has begun — any that were never played
+  // are abandoned, so the whole group stage files away together.
+  const completedGroup = inGroupStage ? group.filter(m => m.status === 'complete') : group
+  const completedKnockout = knockout.filter(m => m.status === 'complete')
+  const completed = [...completedGroup, ...completedKnockout]
+
   return (
     <div className="max-w-2xl mx-auto space-y-12">
       {inGroupStage && (
@@ -147,26 +154,75 @@ export default function MatchHistoryPage({ tournament, onUpdate }: Props) {
           onConfirm={() => { setConfirmAdvance(null); handleAdvance() }}
         />
       )}
-      {brackets.map(b => (
-        <KnockoutRounds
-          key={b}
-          label={brackets.length > 1 ? `Knockout — ${bracketLabel(b)}` : 'Knockout'}
-          matches={knockout.filter(m => (m.bracket ?? 1) === b)}
-          onUpdate={handleUpdate}
-          canEdit={canEditCompleted}
-        />
-      ))}
-      {group.length > 0 && (
-        <StageGroup
-          label={knockout.length > 0 ? 'Group Stage' : null}
+      {brackets.map(b => {
+        const active = knockout.filter(m => (m.bracket ?? 1) === b && m.status !== 'complete')
+        if (active.length === 0) return null
+        return (
+          <KnockoutRounds
+            key={b}
+            label={brackets.length > 1 ? `Knockout — ${bracketLabel(b)}` : 'Knockout'}
+            matches={active}
+            onUpdate={handleUpdate}
+            canEdit={canEditCompleted}
+          />
+        )
+      })}
+      {inGroupStage && group.length > 0 && (
+        <GroupStageActive
           matches={group}
           onUpdate={handleUpdate}
           canEdit={canEditCompleted}
-          stageOver={!inGroupStage}
+        />
+      )}
+      {completed.length > 0 && (
+        <MatchSection
+          title="Completed"
+          count={completed.length}
+          matches={completed}
+          onUpdate={handleUpdate}
+          canEdit={canEditCompleted}
+          recordable={false}
+          collapsible
+          subgroups={completedSubgroups(completedGroup, completedKnockout, brackets.length > 1)}
         />
       )}
     </div>
   )
+}
+
+// groupByName buckets matches by their group name, returning the buckets
+// sorted by name (Group A, Group B, …) so the subheadings read in order.
+function groupByName(matches: Match[]): [string, Match[]][] {
+  const buckets = new Map<string, Match[]>()
+  for (const m of matches) {
+    const name = m.group_name ?? 'Group'
+    ;(buckets.get(name) ?? buckets.set(name, []).get(name)!).push(m)
+  }
+  return [...buckets.entries()].sort((a, b) => a[0].localeCompare(b[0]))
+}
+
+// completedSubgroups builds the subheadings for the shared Completed section in
+// reverse-chronological order — newest at the top, oldest at the bottom. The
+// knockout comes first, its most recent round leading (Final → … → Round of
+// 16), then the group stage sits underneath, still split into its group
+// sections (Group A, B, …). Rounds are prefixed with the bracket name when
+// there's more than one bracket to keep them distinct.
+function completedSubgroups(group: Match[], knockout: Match[], multiBracket: boolean): [string, Match[]][] {
+  const out: [string, Match[]][] = []
+  const brackets = [...new Set(knockout.map(m => m.bracket ?? 1))].sort((a, b) => a - b)
+  for (const b of brackets) {
+    const bracketMatches = knockout.filter(m => (m.bracket ?? 1) === b)
+    // Ascending round number puts the final (round 1) on top and the earliest
+    // round at the bottom of the bracket's block.
+    const rounds = [...new Set(bracketMatches.map(m => m.round ?? 0))].sort((a, b) => a - b)
+    for (const r of rounds) {
+      const label = multiBracket ? `${bracketLabel(b)} — ${roundLabel(r)}` : roundLabel(r)
+      out.push([label, bracketMatches.filter(m => (m.round ?? 0) === r)])
+    }
+  }
+  // The group stage is the oldest, so it files in beneath the knockout.
+  out.push(...groupByName(group))
+  return out
 }
 
 function StageHeader({ label }: { label: string }) {
@@ -177,9 +233,12 @@ function StageHeader({ label }: { label: string }) {
   )
 }
 
+// KnockoutRounds shows a bracket's live matches under their round headings.
+// Finished matches are handled by the shared Completed section, so only active
+// ones reach here.
 function KnockoutRounds({ label, matches, onUpdate, canEdit }: { label: string; matches: Match[]; onUpdate: (m: Match) => void; canEdit: (m: Match) => boolean }) {
-  // Latest round first: the final (round 1) is the furthest-progressed, so
-  // sort ascending by round number — whatever round is currently live sits on top.
+  // Earliest round first: the current live round has the highest number, so
+  // sort ascending — whatever round is furthest along sits on top.
   const rounds = [...new Set(matches.map(m => m.round))].sort((a, b) => (a ?? 0) - (b ?? 0))
 
   return (
@@ -197,7 +256,6 @@ function KnockoutRounds({ label, matches, onUpdate, canEdit }: { label: string; 
             matches={roundMatches}
             onUpdate={onUpdate}
             canEdit={canEdit}
-            collapsible={roundMatches.every(m => m.status === 'complete')}
           />
         )
       })}
@@ -205,34 +263,15 @@ function KnockoutRounds({ label, matches, onUpdate, canEdit }: { label: string; 
   )
 }
 
-function StageGroup({ label, matches, onUpdate, canEdit, stageOver = false }: { label: string | null; matches: Match[]; onUpdate: (m: Match) => void; canEdit: (m: Match) => boolean; stageOver?: boolean }) {
-  // Once the knockout has started the group stage is history: everything —
-  // including games that were never played — files into the collapsed
-  // Completed section, and nothing can be recorded any more.
-  if (stageOver) {
-    return (
-      <div className="space-y-8">
-        {label && <StageHeader label={label} />}
-        <MatchSection
-          title="Completed"
-          count={matches.length}
-          matches={matches}
-          onUpdate={onUpdate}
-          canEdit={canEdit}
-          recordable={false}
-          collapsible
-        />
-      </div>
-    )
-  }
-
+// GroupStageActive shows the group stage's live matches — In Progress and
+// Upcoming, split by group. Finished group games live in the shared Completed
+// section, so this only renders while the group stage is running.
+function GroupStageActive({ matches, onUpdate, canEdit }: { matches: Match[]; onUpdate: (m: Match) => void; canEdit: (m: Match) => boolean }) {
   const inProgress = matches.filter(m => m.status === 'in_progress')
   const upcoming = matches.filter(m => m.status === 'pending')
-  const completed = matches.filter(m => m.status === 'complete')
 
   return (
     <div className="space-y-8">
-      {label && <StageHeader label={label} />}
       {inProgress.length > 0 && (
         <MatchSection
           title="In Progress"
@@ -241,6 +280,7 @@ function StageGroup({ label, matches, onUpdate, canEdit, stageOver = false }: { 
           onUpdate={onUpdate}
           canEdit={canEdit}
           accentColor="var(--color-brand)"
+          subgroups={groupByName(inProgress)}
         />
       )}
       {upcoming.length > 0 && (
@@ -250,16 +290,7 @@ function StageGroup({ label, matches, onUpdate, canEdit, stageOver = false }: { 
           matches={upcoming}
           onUpdate={onUpdate}
           canEdit={canEdit}
-        />
-      )}
-      {completed.length > 0 && (
-        <MatchSection
-          title="Completed"
-          count={completed.length}
-          matches={completed}
-          onUpdate={onUpdate}
-          canEdit={canEdit}
-          collapsible
+          subgroups={groupByName(upcoming)}
         />
       )}
     </div>
@@ -275,6 +306,7 @@ function MatchSection({
   accentColor,
   collapsible = false,
   recordable = true,
+  subgroups,
 }: {
   title: string
   count: number
@@ -288,6 +320,9 @@ function MatchSection({
   // False for group games once the knockout has started — their results are
   // locked, so unplayed ones must not offer a Record button.
   recordable?: boolean
+  // When set, rows render under subheadings (Group A / Round of 16 / …) rather
+  // than as one flat list. Each entry is [label, matches].
+  subgroups?: [string, Match[]][]
 }) {
   const [expanded, setExpanded] = useState(false)
   const collapsed = collapsible && !expanded
@@ -324,10 +359,22 @@ function MatchSection({
       ) : (
         <div className="flex items-center gap-3 mb-4">{header}</div>
       )}
-      {!collapsed && (
-        <div className="rounded-xl overflow-hidden border divide-y" style={{ borderColor: 'var(--color-border)', backgroundColor: 'var(--color-surface-card)' }}>
-          {matches.map(m => <MatchRow key={m.id} match={m} onUpdate={onUpdate} canEdit={canEdit(m)} recordable={recordable} />)}
-        </div>
+      {!collapsed && (subgroups
+        // Each group gets its own card, spaced apart, so the groups read as
+        // distinct blocks rather than one long list.
+        ? <div className="space-y-3">
+            {subgroups.map(([name, ms]) => (
+              <div key={name} className="rounded-xl overflow-hidden border divide-y" style={{ borderColor: 'var(--color-border)', backgroundColor: 'var(--color-surface-card)' }}>
+                <p className="px-4 py-1.5 text-xs uppercase tracking-widest font-bold" style={{ color: 'var(--color-brand-bright)', backgroundColor: 'var(--color-surface-input)' }}>
+                  {name}
+                </p>
+                {ms.map(m => <MatchRow key={m.id} match={m} onUpdate={onUpdate} canEdit={canEdit(m)} recordable={recordable} />)}
+              </div>
+            ))}
+          </div>
+        : <div className="rounded-xl overflow-hidden border divide-y" style={{ borderColor: 'var(--color-border)', backgroundColor: 'var(--color-surface-card)' }}>
+            {matches.map(m => <MatchRow key={m.id} match={m} onUpdate={onUpdate} canEdit={canEdit(m)} recordable={recordable} />)}
+          </div>
       )}
     </section>
   )

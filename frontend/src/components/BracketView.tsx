@@ -50,6 +50,29 @@ function currentRoundOf(ms: Match[]): number {
   return Math.max(...unfinished)
 }
 
+// A first-round cell is either a real matchup or a bye — a top seed that
+// advanced unopposed because the qualifier count wasn't a power of two.
+type Cell =
+  | { kind: 'match'; position: number; match: Match }
+  | { kind: 'bye'; position: number; name: string | null }
+
+// byeCells reconstructs the byes for the entry round. A first-round match at
+// position j feeds its parent at j/2 (player1 if j is even, player2 if odd),
+// so a parent slot that holds a player but has no feeder match below it was a
+// bye. We surface those as cards in the first round rather than letting the
+// seed silently appear a round later.
+function byeCells(matches: Match[], firstRound: number): Cell[] {
+  if (firstRound < 2) return []
+  const filled = new Set(matches.filter(m => m.round === firstRound).map(m => m.position))
+  const byes: Cell[] = []
+  for (const p of matches.filter(m => m.round === firstRound - 1)) {
+    const base = (p.position ?? 0) * 2
+    if (!filled.has(base) && p.player1_id) byes.push({ kind: 'bye', position: base, name: p.player1_name })
+    if (!filled.has(base + 1) && p.player2_id) byes.push({ kind: 'bye', position: base + 1, name: p.player2_name })
+  }
+  return byes
+}
+
 function BracketTree({ matches }: { matches: Match[] }) {
   const current = currentRoundOf(matches)
   // Only show rounds someone has reached — later all-TBD rounds appear as
@@ -66,7 +89,10 @@ function BracketTree({ matches }: { matches: Match[] }) {
   const champion = final?.status === 'complete'
     ? (final.winner_id === final.player1_id ? final.player1_name : final.player2_name)
     : null
-  const widest = Math.max(...rounds.map(r => matches.filter(m => m.round === r).length))
+  const firstRound = Math.max(...matches.map(m => m.round ?? 0))
+  const byes = byeCells(matches, firstRound)
+  const widest = Math.max(...rounds.map(r =>
+    matches.filter(m => m.round === r).length + (r === firstRound ? byes.length : 0)))
 
   return (
     <div className="overflow-x-auto pt-2 pb-4">
@@ -80,6 +106,12 @@ function BracketTree({ matches }: { matches: Match[] }) {
             .sort((a, b) => (a.position ?? 0) - (b.position ?? 0))
           const isCurrent = round === current
           const played = roundMatches.filter(m => m.status === 'complete').length
+          // Byes ride alongside the real matches in the entry round, slotted by
+          // position so each sits where its seed would in the bracket.
+          const cells: Cell[] = [
+            ...roundMatches.map(m => ({ kind: 'match' as const, position: m.position ?? 0, match: m })),
+            ...(round === firstRound ? byes : []),
+          ].sort((a, b) => a.position - b.position)
 
           return (
             <div key={round} className="space-y-3">
@@ -100,9 +132,11 @@ function BracketTree({ matches }: { matches: Match[] }) {
               {/* Equal flex slots keep each match centred over its two
                   feeder matches in the (wider) row below. */}
               <div className="flex">
-                {roundMatches.map(m => (
-                  <div key={m.id} className="flex-1 flex justify-center min-w-0 px-1">
-                    {round === 1 ? <FinalBoard match={m} /> : <MatchCard match={m} />}
+                {cells.map(cell => (
+                  <div key={cell.kind === 'match' ? cell.match.id : `bye-${cell.position}`} className="flex-1 flex justify-center min-w-0 px-1">
+                    {cell.kind === 'bye'
+                      ? <ByeCard name={cell.name} />
+                      : round === 1 ? <FinalBoard match={cell.match} /> : <MatchCard match={cell.match} />}
                   </div>
                 ))}
               </div>
@@ -320,6 +354,31 @@ function MatchCard({ match }: { match: Match }) {
           side="green"
           faded={done && !p2Won}
         />
+      </div>
+    </div>
+  )
+}
+
+// ByeCard stands in for a top seed that advanced unopposed: the seed sits on
+// its red panel over a muted "Bye" slot, so the entry round shows every player
+// even when the qualifier count forces byes.
+function ByeCard({ name }: { name: string | null }) {
+  return (
+    <div
+      className="relative rounded-xl border w-full max-w-[220px]"
+      style={{ borderColor: '#444', backgroundColor: 'var(--color-surface-card)' }}
+    >
+      <div className="p-2 flex flex-col">
+        <PlayerPanel name={name} score={null} side="red" faded={false} />
+        <div
+          className="self-center -my-2 w-8 h-8 rounded-full flex items-center justify-center text-[8px] font-black uppercase border-2 z-10"
+          style={{ backgroundColor: 'var(--color-surface-base)', borderColor: '#444', color: '#888' }}
+        >
+          bye
+        </div>
+        <div className="rounded-lg px-2 py-3 text-center" style={{ backgroundColor: 'var(--color-surface-input)' }}>
+          <p className="text-xs uppercase tracking-widest font-bold" style={{ color: '#666' }}>---</p>
+        </div>
       </div>
     </div>
   )
