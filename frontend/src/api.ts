@@ -1,4 +1,16 @@
-import type { Tournament, Competitor, RemovedCompetitor, Group, Match, TicketTailorEvent, Config, Settings } from './types'
+import type { Tournament, Competitor, RemovedCompetitor, Group, Match, TicketTailorEvent, Config, Settings, TieBreak } from './types'
+
+// TieBreakRequired is thrown when advancing hits a tie the ranking rules can't
+// settle. It carries the tied players so the caller can ask the organiser to
+// choose, then repeat the advance with their answer.
+export class TieBreakRequired extends Error {
+  ties: TieBreak[]
+  constructor(ties: TieBreak[]) {
+    super('A tie needs to be settled before advancing')
+    this.name = 'TieBreakRequired'
+    this.ties = ties
+  }
+}
 
 async function request<T>(path: string, options?: RequestInit): Promise<T> {
   const res = await fetch(path, {
@@ -7,6 +19,7 @@ async function request<T>(path: string, options?: RequestInit): Promise<T> {
   })
   if (!res.ok) {
     const body = await res.json().catch(() => ({ error: res.statusText }))
+    if (res.status === 409 && Array.isArray(body.ties)) throw new TieBreakRequired(body.ties)
     throw new Error(body.error ?? 'Request failed')
   }
   if (res.status === 204) return undefined as T
@@ -60,10 +73,14 @@ export const api = {
       body: JSON.stringify({ name }),
     }),
 
-  // Qualifiers per group and bracket layout come from the persisted
-  // settings; advancing takes no parameters.
-  advance: () =>
-    request<void>('/api/tournament/advance', { method: 'POST' }),
+  // Qualifiers per bracket and bracket layout come from the persisted settings.
+  // tieBreaks maps a tie ID to the finishing order the organiser chose; it is
+  // only needed after an advance threw TieBreakRequired.
+  advance: (tieBreaks?: Record<string, string[]>) =>
+    request<void>('/api/tournament/advance', {
+      method: 'POST',
+      body: JSON.stringify({ tie_breaks: tieBreaks ?? {} }),
+    }),
 
   updateMatch: (id: string, winner_id: string, points: number) =>
     request<Match>(`/api/matches/${id}`, {

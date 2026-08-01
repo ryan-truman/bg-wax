@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>CFBundleName</key>
+    <string>Backgammon and Wax</string>
+    <key>CFBundleDisplayName</key>
+    <string>Backgammon and Wax</string>
+    <key>CFBundleExecutable</key>
+    <string>bgwax</string>
+    <key>CFBundleIdentifier</key>
+    <string>com.ryantruman.backgammonandwax</string>
+    <key>CFBundleVersion</key>
+    <string>1.0.0</string>
+    <key>CFBundleShortVersionString</key>
+    <string>1.0.0</string>
+    <key>CFBundlePackageType</key>
+    <string>APPL</string>
+    <key>CFBundleIconFile</key>
+    <string>icon</string>
+    <key>LSMinimumSystemVersion</key>
+    <string>12.0</string>
+    <key>NSHighResolutionCapable</key>
+    <true/>
+    <key>LSMultipleInstancesProhibited</key>
+    <true/>
+</dict>
+</plist>

@@ -67,11 +67,12 @@ func spaHandler(fsys fs.FS) http.Handler {
 		if path == "" {
 			path = "index.html"
 		}
-		_, err := fsys.Open(path)
+		f, err := fsys.Open(path)
 		if err != nil {
 			http.ServeFileFS(w, r, fsys, "index.html")
 			return
 		}
+		f.Close()
 		fileServer.ServeHTTP(w, r)
 	})
 }

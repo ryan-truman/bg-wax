@@ -28,7 +28,9 @@ func TestMinGroupGamesSetting(t *testing.T) {
 	if got := getMinGames(); got != 4 {
 		t.Fatalf("default min_group_games = %d, want 4", got)
 	}
-	for _, bad := range []string{`{"min_group_games":2}`, `{"min_group_games":11}`, `{"num_groups":27}`, `{"advance_total":1}`, `{"advance_total":17}`} {
+	// advance_total must be one of the powers of two a bracket can be built
+	// from, so 6 and 12 are rejected as firmly as out-of-range values.
+	for _, bad := range []string{`{"min_group_games":2}`, `{"min_group_games":11}`, `{"num_groups":27}`, `{"advance_total":1}`, `{"advance_total":17}`, `{"advance_total":6}`, `{"advance_total":12}`} {
 		if rec := do(t, s, "PUT", "/api/settings", bad); rec.Code != http.StatusBadRequest {
 			t.Fatalf("PUT %s: got %d, want 400", bad, rec.Code)
 		}

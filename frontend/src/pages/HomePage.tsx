@@ -1,32 +1,13 @@
-import { useState, useEffect } from 'react'
 import { Link } from 'react-router-dom'
-import { api } from '../api'
-import type { Tournament, Group } from '../types'
-import GroupCard from '../components/GroupCard'
+import type { Tournament } from '../types'
 import BracketView from '../components/BracketView'
+import GroupStage from '../components/GroupStage'
 
 interface Props {
   tournament: Tournament | null
 }
 
 export default function HomePage({ tournament }: Props) {
-  const [groups, setGroups] = useState<Group[]>([])
-  const [loading, setLoading] = useState(true)
-
-  useEffect(() => {
-    async function load() {
-      try {
-        if (!tournament) return
-        if (tournament.status === 'group_stage') {
-          setGroups(await api.getGroups())
-        }
-      } finally {
-        setLoading(false)
-      }
-    }
-    load()
-  }, [tournament?.status])
-
   if (!tournament) {
     return (
       <div className="flex flex-col items-center justify-center py-32 gap-3 text-center">
@@ -37,10 +18,6 @@ export default function HomePage({ tournament }: Props) {
         </Link>
       </div>
     )
-  }
-
-  if (loading) {
-    return <p className="text-sm" style={{ color: '#888' }}>Loading…</p>
   }
 
   if (tournament.status === 'setup') {
@@ -56,17 +33,15 @@ export default function HomePage({ tournament }: Props) {
   }
 
   if (tournament.status === 'group_stage') {
-    return (
-      <div>
-        <h2 className="text-xs uppercase tracking-widest mb-6" style={{ color: '#777' }}>Group Stage</h2>
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
-          {groups.map(g => (
-            <GroupCard key={g.id} group={g} />
-          ))}
-        </div>
-      </div>
-    )
+    return <GroupStage />
   }
 
-  return <BracketView />
+  // Knockout and beyond: the bracket leads, with the finished group stage
+  // tucked away underneath it.
+  return (
+    <div className="space-y-12">
+      <BracketView />
+      <GroupStage collapsible />
+    </div>
+  )
 }

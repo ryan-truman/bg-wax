@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"net/http"
 	"testing"
 )
@@ -49,5 +50,47 @@ func TestAdvanceTotalBestRunnersUp(t *testing.T) {
 	}
 	if firstRound != 8 {
 		t.Fatalf("first-round matches = %d, want 8 (16 qualifiers)", firstRound)
+	}
+}
+
+// TestAdvanceFailureLeavesNoPartialBracket: when the top bracket would swallow
+// every qualifier and leave the second bracket short, the advance is refused
+// before anything is written — no half-seeded knockout, status unchanged.
+func TestAdvanceFailureLeavesNoPartialBracket(t *testing.T) {
+	s := newTestServer(t)
+	ctx := context.Background()
+
+	exec := func(query string, args ...any) {
+		t.Helper()
+		if _, err := s.db.ExecContext(ctx, query, args...); err != nil {
+			t.Fatalf("exec %q: %v", query, err)
+		}
+	}
+	tID := newID()
+	exec(`INSERT INTO tournaments (id, name, status) VALUES (?, 'T', 'group_stage')`, tID)
+
+	// Two groups of two with decided matches: four players in total.
+	for _, name := range []string{"A", "B"} {
+		gid := newID()
+		exec(`INSERT INTO groups (id, tournament_id, name) VALUES (?, ?, ?)`, gid, tID, "Group "+name)
+		winner, loser := newID(), newID()
+		exec(`INSERT INTO competitors (id, tournament_id, name, group_id) VALUES (?, ?, ?, ?)`, winner, tID, name+" Winner", gid)
+		exec(`INSERT INTO competitors (id, tournament_id, name, group_id) VALUES (?, ?, ?, ?)`, loser, tID, name+" Runner", gid)
+		exec(`INSERT INTO matches (id, tournament_id, stage, group_id, player1_id, player2_id, winner_id, player1_score, player2_score, status)
+			VALUES (?, ?, 'group', ?, ?, ?, ?, 2, 0, 'complete')`, newID(), tID, gid, winner, loser, winner)
+	}
+
+	// Four per bracket over two brackets: the first takes all four players,
+	// leaving nobody for the second.
+	putSettings(t, s, `{"advance_total":4,"single_bracket":false}`)
+	if rec := do(t, s, "POST", "/api/tournament/advance", ""); rec.Code != http.StatusBadRequest {
+		t.Fatalf("advance: got %d, want 400 when the second bracket cannot be formed: %s", rec.Code, rec.Body)
+	}
+
+	if got := len(listBracket(t, s)); got != 0 {
+		t.Fatalf("knockout matches = %d, want 0 — a failed advance must write nothing", got)
+	}
+	if got := tournamentStatus(t, s); got != "group_stage" {
+		t.Fatalf("status = %q, want group_stage after a failed advance", got)
 	}
 }

@@ -101,6 +101,47 @@ export interface Match {
   status: MatchStatus;
 }
 /**
+ * TieBreak is a tie the ranking rules cannot settle at a point where the order
+ * decides who progresses, reported so the organiser can choose. Only ties that
+ * change the outcome are raised: players level on points who all qualify anyway
+ * are left in whatever order the standings gave them.
+ * Scope is "group" for a tie inside one group's standings, or "pool" for a tie
+ * between the next-place finishers of different groups competing for the last
+ * few places (those players have never met, so head-to-head cannot help).
+ * Place is the 1-based finishing place the tie starts at — meaningful for a
+ * group tie, but only a position within the pool for a "pool" tie. Slots is how
+ * many of the tied players take the remaining qualifying places.
+ * DropsToPool and DropsToBracket say where the players who miss out land, so
+ * the organiser can see what they are deciding: a group tie can drop them into
+ * the runners-up pool for the same bracket, otherwise they fall to
+ * DropsToBracket — which is 0 when there is no bracket below and missing out
+ * means not progressing at all.
+ */
+export interface TieBreak {
+  id: string;
+  scope: string;
+  group_name: string;
+  bracket: number /* int */;
+  place: number /* int */;
+  slots: number /* int */;
+  points: number /* int */;
+  drops_to_pool: boolean;
+  drops_to_bracket: number /* int */;
+  competitors: TieCandidate[];
+}
+/**
+ * TieCandidate is one competitor caught in a TieBreak, with the group-stage
+ * record shown alongside their name so the organiser can judge the call.
+ */
+export interface TieCandidate {
+  id: string;
+  name: string;
+  group_name: string;
+  played: number /* int */;
+  won: number /* int */;
+  points: number /* int */;
+}
+/**
  * TicketTailorEvent is one event on the connected Ticket Tailor account,
  * listed so the user can pick which event to import attendees from.
  */
@@ -120,6 +161,7 @@ export interface TicketTailorEvent {
  * how many finishers advance into each knockout bracket in total: the top
  * places from every group qualify, and the best of the next-place finishers
  * fill any remainder (e.g. 16 from 6 groups = top 2 each + the 4 best thirds).
+ * It must be a power of two (see advanceTotals) so the bracket fills exactly.
  * SingleBracket puts all qualifiers in one bracket instead of splitting into
  * Champion's and Europa leagues.
  */

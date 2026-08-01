@@ -129,7 +129,7 @@ func (c *Client) TicketsForEvent(eventID string) ([]IssuedTicket, error) {
 			}
 		}
 
-		if page.Links.Next == "" {
+		if page.Links.Next == "" || len(page.Data) == 0 {
 			break
 		}
 		params.Set("starting_after", page.Data[len(page.Data)-1].ID)

@@ -4,6 +4,19 @@ import { api } from '../api'
 import type { Tournament, TicketTailorEvent, Settings } from '../types'
 import ConfirmDialog from '../components/ConfirmDialog'
 
+// Bracket sizes on offer, mirroring advanceTotals in internal/api/handlers.go.
+// Powers of two only, so a bracket fills exactly and nobody gets a bye.
+const ADVANCE_TOTALS = [2, 4, 8, 16]
+
+// stepAdvanceTotal moves one place along ADVANCE_TOTALS, so the −/+ buttons
+// step 8 → 16 rather than through sizes no bracket can be built from. An
+// unrecognised stored value (an older setting, say) snaps onto the list.
+function stepAdvanceTotal(current: number, direction: 1 | -1): number {
+  const i = ADVANCE_TOTALS.indexOf(current)
+  if (i === -1) return ADVANCE_TOTALS[0]
+  return ADVANCE_TOTALS[Math.min(ADVANCE_TOTALS.length - 1, Math.max(0, i + direction))]
+}
+
 const LS_API_KEY = 'tt_api_key'
 const LS_EVENT_ID = 'tt_event_id'
 const LS_EVENT_NAME = 'tt_event_name'
@@ -355,8 +368,8 @@ export default function SettingsPage({ tournament, onUpdate }: Props) {
         </p>
         <div className="flex items-center gap-2">
           <button
-            onClick={() => changeSettings({ advance_total: Math.max(8, settings.advance_total - 1) })}
-            disabled={settings.advance_total <= 8}
+            onClick={() => changeSettings({ advance_total: stepAdvanceTotal(settings.advance_total, -1) })}
+            disabled={settings.advance_total <= ADVANCE_TOTALS[0]}
             className="w-8 h-8 flex items-center justify-center rounded border text-sm font-bold transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
             style={{ borderColor: 'var(--color-border)', color: '#f0f0f0' }}
           >
@@ -364,8 +377,8 @@ export default function SettingsPage({ tournament, onUpdate }: Props) {
           </button>
           <span className="w-8 text-center text-sm tabular-nums" style={{ color: '#f0f0f0' }}>{settings.advance_total}</span>
           <button
-            onClick={() => changeSettings({ advance_total: Math.min(16, settings.advance_total + 1) })}
-            disabled={settings.advance_total >= 16}
+            onClick={() => changeSettings({ advance_total: stepAdvanceTotal(settings.advance_total, 1) })}
+            disabled={settings.advance_total >= ADVANCE_TOTALS[ADVANCE_TOTALS.length - 1]}
             className="w-8 h-8 flex items-center justify-center rounded border text-sm font-bold transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
             style={{ borderColor: 'var(--color-border)', color: '#f0f0f0' }}
           >

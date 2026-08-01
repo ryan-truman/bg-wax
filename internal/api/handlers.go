@@ -6,9 +6,11 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"io"
 	mathrand "math/rand"
 	"net/http"
 	"os"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -283,7 +285,7 @@ func (s *Server) loadSettings(ctx context.Context) Settings {
 				st.NumGroups = n
 			}
 		case "advance_total":
-			if n, err := strconv.Atoi(v); err == nil && n >= minAdvanceTotal && n <= maxAdvanceTotal {
+			if n, err := strconv.Atoi(v); err == nil && validAdvanceTotal(n) {
 				st.AdvanceTotal = n
 			}
 		case "single_bracket":
@@ -313,8 +315,8 @@ func (s *Server) handleUpdateSettings(w http.ResponseWriter, r *http.Request) {
 	case st.NumGroups < 0 || st.NumGroups > 26:
 		writeError(w, http.StatusBadRequest, "num_groups must be between 1 and 26, or 0 for automatic")
 		return
-	case st.AdvanceTotal < minAdvanceTotal || st.AdvanceTotal > maxAdvanceTotal:
-		writeError(w, http.StatusBadRequest, fmt.Sprintf("advance_total must be between %d and %d", minAdvanceTotal, maxAdvanceTotal))
+	case !validAdvanceTotal(st.AdvanceTotal):
+		writeError(w, http.StatusBadRequest, fmt.Sprintf("advance_total must be one of %s", advanceTotalsLabel()))
 		return
 	}
 
@@ -476,9 +478,49 @@ func newID() string {
 
 // --- groups ------------------------------------------------------------------
 
+// rankAbove reports whether a should be ranked above b — the one place the
+// ranking order is defined, used for standings, qualifying and seeding alike:
+//
+//  1. most points;
+//  2. head-to-head, if one of them beat the other;
+//  3. most wins.
+//
+// Players it separates on none of the three are genuinely level, and where that
+// decides who progresses the organiser is asked to settle it (see cutForced).
+func rankAbove(a, b CompetitorStanding, beat map[string]map[string]bool) bool {
+	if a.Points != b.Points {
+		return a.Points > b.Points
+	}
+	if beat[a.ID][b.ID] {
+		return true
+	}
+	if beat[b.ID][a.ID] {
+		return false
+	}
+	return a.Won > b.Won
+}
+
+// cutForced reports whether the ranking rules alone decide a tied block's split
+// at index cut: every player above the line must rank strictly above every
+// player below it. Ordering head-to-head above wins means the rules can
+// contradict themselves (A beat B, B beat C, C beat A, all on equal wins), so a
+// pair only counts as decided when the comparison holds one way and not the
+// other. Checking across the line rather than within it keeps the question to
+// the one that matters — who progresses — so players left unordered on the same
+// side of the cut are no reason to trouble the organiser.
+func cutForced(block []CompetitorStanding, cut int, beat map[string]map[string]bool) bool {
+	for _, a := range block[:cut] {
+		for _, b := range block[cut:] {
+			if !rankAbove(a, b, beat) || rankAbove(b, a, beat) {
+				return false
+			}
+		}
+	}
+	return true
+}
+
 // groupStandings tallies completed matches for a group and returns its
-// competitors ranked best-first (most points, then most wins). Removed
-// competitors are excluded.
+// competitors ranked best-first by rankAbove. Removed competitors are excluded.
 func (s *Server) groupStandings(ctx context.Context, groupID string) ([]CompetitorStanding, error) {
 	cRows, err := s.db.QueryContext(ctx, `
 		SELECT id, name FROM competitors WHERE group_id = ? AND removed = 0 ORDER BY name
@@ -487,6 +529,7 @@ func (s *Server) groupStandings(ctx context.Context, groupID string) ([]Competit
 		return nil, err
 	}
 	standings := map[string]*CompetitorStanding{}
+	beat := map[string]map[string]bool{} // beat[a][b] == a defeated b, the tie-breaker
 	var orderedIDs []string
 	for cRows.Next() {
 		var st CompetitorStanding
@@ -536,6 +579,16 @@ func (s *Server) groupStandings(ctx context.Context, groupID string) ([]Competit
 				p2.Lost++
 			}
 		}
+		if winnerID != nil {
+			loser := p1ID
+			if *winnerID == p1ID {
+				loser = p2ID
+			}
+			if beat[*winnerID] == nil {
+				beat[*winnerID] = map[string]bool{}
+			}
+			beat[*winnerID][loser] = true
+		}
 	}
 	mRows.Close()
 
@@ -543,12 +596,7 @@ func (s *Server) groupStandings(ctx context.Context, groupID string) ([]Competit
 	for _, id := range orderedIDs {
 		result = append(result, *standings[id])
 	}
-	sort.SliceStable(result, func(i, j int) bool {
-		if result[i].Points != result[j].Points {
-			return result[i].Points > result[j].Points
-		}
-		return result[i].Won > result[j].Won
-	})
+	sort.SliceStable(result, func(i, j int) bool { return rankAbove(result[i], result[j], beat) })
 	return result, nil
 }
 
@@ -653,7 +701,8 @@ func (s *Server) handleListMatches(w http.ResponseWriter, r *http.Request) {
 func resolveKnockoutWalkovers(ctx context.Context, tx *sql.Tx, tournamentID string) error {
 	for {
 		var id string
-		var bracket, round, position int
+		var bracket *int
+		var round, position int
 		var winnerID string
 		err := tx.QueryRowContext(ctx, `
 			SELECT m.id, m.bracket, m.round, m.position,
@@ -684,7 +733,7 @@ func resolveKnockoutWalkovers(ctx context.Context, tx *sql.Tx, tournamentID stri
 			}
 			if _, err := tx.ExecContext(ctx, fmt.Sprintf(`
 				UPDATE matches SET %s = ?
-				WHERE tournament_id = ? AND stage = 'knockout' AND bracket = ? AND round = ? AND position = ?
+				WHERE tournament_id = ? AND stage = 'knockout' AND bracket IS ? AND round = ? AND position = ?
 			`, col), winnerID, tournamentID, bracket, round-1, position/2); err != nil {
 				return err
 			}
@@ -1039,14 +1088,25 @@ func (s *Server) handleDraw(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
-// advance-total bounds and default: how many finishers fill each knockout
-// bracket. The organiser picks a total (8–16 in the UI); the backend keeps a
-// slightly wider floor so small tournaments and tests can form tiny brackets.
-const (
-	minAdvanceTotal     = 2
-	maxAdvanceTotal     = 16
-	defaultAdvanceTotal = 16
-)
+// advanceTotals are the qualifier counts a knockout bracket can be built from.
+// Only powers of two are offered, so a bracket always fills exactly and no one
+// gets a bye. 8 and 16 are the usual choices; 2 and 4 cover small tournaments.
+var advanceTotals = []int{2, 4, 8, 16}
+
+const defaultAdvanceTotal = 16
+
+func validAdvanceTotal(n int) bool {
+	return slices.Contains(advanceTotals, n)
+}
+
+// advanceTotalsLabel lists the valid totals for an error message, e.g. "2, 4, 8, 16".
+func advanceTotalsLabel() string {
+	parts := make([]string, len(advanceTotals))
+	for i, n := range advanceTotals {
+		parts[i] = strconv.Itoa(n)
+	}
+	return strings.Join(parts, ", ")
+}
 
 // nextPow2 returns the smallest power of two >= n.
 func nextPow2(n int) int {
@@ -1146,15 +1206,22 @@ func avoidGroupClashes(slots []int, quals []qualifier) {
 	}
 }
 
-// createKnockoutBracket seeds quals by points (then wins) into a new
-// single-elimination bracket, keeping same-group players apart for as long as
-// possible, and inserts all its matches tagged with the given bracket number.
-func (s *Server) createKnockoutBracket(ctx context.Context, tournamentID string, bracket int, quals []qualifier) error {
+// createKnockoutBracket seeds quals by the usual ranking order (see rankAbove),
+// falling back to any order the organiser chose to settle a tie, into a new
+// single-elimination bracket. Same-group players are kept apart for as long as
+// possible, and every match is tagged with the given bracket number.
+func createKnockoutBracket(ctx context.Context, tx *sql.Tx, tournamentID string, bracket int, quals []qualifier, beat, manual map[string]map[string]bool) error {
 	sort.SliceStable(quals, func(i, j int) bool {
-		if quals[i].points != quals[j].points {
-			return quals[i].points > quals[j].points
+		a, b := quals[i], quals[j]
+		as := CompetitorStanding{ID: a.id, Won: a.won, Points: a.points}
+		bs := CompetitorStanding{ID: b.id, Won: b.won, Points: b.points}
+		if rankAbove(as, bs, beat) {
+			return true
 		}
-		return quals[i].won > quals[j].won
+		if rankAbove(bs, as, beat) {
+			return false
+		}
+		return manual[a.id][b.id]
 	})
 
 	size := nextPow2(len(quals))
@@ -1184,7 +1251,7 @@ func (s *Server) createKnockoutBracket(ctx context.Context, tournamentID string,
 		parentMatch[round] = map[int]string{}
 		for pos := 0; pos < (1 << (round - 1)); pos++ {
 			mid := newID()
-			if _, err := s.db.ExecContext(ctx, `
+			if _, err := tx.ExecContext(ctx, `
 				INSERT INTO matches (id, tournament_id, stage, bracket, round, position, status)
 				VALUES (?, ?, 'knockout', ?, ?, ?, 'pending')
 			`, mid, tournamentID, bracket, round, pos); err != nil {
@@ -1200,7 +1267,7 @@ func (s *Server) createKnockoutBracket(ctx context.Context, tournamentID string,
 		a, b := slots[2*j], slots[2*j+1]
 
 		if a >= 0 && b >= 0 {
-			if _, err := s.db.ExecContext(ctx, `
+			if _, err := tx.ExecContext(ctx, `
 				INSERT INTO matches (id, tournament_id, stage, bracket, round, position, player1_id, player2_id, status)
 				VALUES (?, ?, 'knockout', ?, ?, ?, ?, ?, 'pending')
 			`, newID(), tournamentID, bracket, firstRound, j, quals[a].id, quals[b].id); err != nil {
@@ -1217,7 +1284,7 @@ func (s *Server) createKnockoutBracket(ctx context.Context, tournamentID string,
 		if j%2 == 1 {
 			col = "player2_id"
 		}
-		if _, err := s.db.ExecContext(ctx,
+		if _, err := tx.ExecContext(ctx,
 			fmt.Sprintf(`UPDATE matches SET %s = ? WHERE id = ?`, col),
 			quals[winner].id, parentMatch[firstRound-1][j/2]); err != nil {
 			return err
@@ -1227,45 +1294,121 @@ func (s *Server) createKnockoutBracket(ctx context.Context, tournamentID string,
 	return nil
 }
 
-// pickTier selects the next bracket's worth of qualifiers — `target` players in
-// total — from the group standings. A base number qualify from every group
-// (target ÷ groups), then the best of the next-place finishers across the
-// groups fill the remainder (the "best runners-up" rule). `taken` records how
-// many places each group has already given to earlier brackets and is advanced
-// as places are used, so calling pickTier again peels off the next tier down.
-func pickTier(standings map[string][]CompetitorStanding, groupIDs []string, taken map[string]int, target int) []qualifier {
-	base := target / len(groupIDs)
-	rem := target % len(groupIDs)
+// headToHead returns beat[a][b] == true when competitor a defeated competitor b
+// in a completed group-stage match. Used as the final ranking tie-breaker when
+// two players are level on wins and points.
+func (s *Server) headToHead(ctx context.Context, tournamentID string) (map[string]map[string]bool, error) {
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT winner_id, player1_id, player2_id FROM matches
+		WHERE tournament_id = ? AND stage = 'group' AND status = 'complete' AND winner_id IS NOT NULL
+	`, tournamentID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	beat := map[string]map[string]bool{}
+	for rows.Next() {
+		var winner, p1, p2 string
+		if err := rows.Scan(&winner, &p1, &p2); err != nil {
+			return nil, err
+		}
+		loser := p1
+		if winner == p1 {
+			loser = p2
+		}
+		if beat[winner] == nil {
+			beat[winner] = map[string]bool{}
+		}
+		beat[winner][loser] = true
+	}
+	return beat, rows.Err()
+}
+
+// tierPicker selects the qualifiers for each knockout bracket from the group
+// standings, and reports the ties it cannot settle on its own.
+//
+// Selection works as before: a base number qualify from every group (target ÷
+// groups), then the best of the next-place finishers across the groups fill the
+// remainder (the "best runners-up" rule). `taken` records how many places each
+// group has already given to earlier brackets, so calling pick again peels off
+// the next tier down.
+//
+// At each cut — the boundary between the players taken and those left behind —
+// players level on points that head-to-head cannot separate would be split
+// arbitrarily. Those cuts are collected in `ties` for the organiser to settle;
+// orderings they have already given arrive in `resolved`, keyed by tie ID.
+type tierPicker struct {
+	standings  map[string][]CompetitorStanding
+	groupNames map[string]string
+	groupIDs   []string
+	beat       map[string]map[string]bool
+	resolved   map[string][]string
+	taken      map[string]int
+	ties       []TieBreak
+	// manual records the precedence the organiser chose, in the same shape as
+	// beat, so seeding keeps their order rather than re-sorting it away.
+	manual map[string]map[string]bool
+	// numBrackets is needed to tell a tie whether the players who miss out drop
+	// into a lower bracket or out of the tournament altogether.
+	numBrackets int
+}
+
+func newTierPicker(standings map[string][]CompetitorStanding, groupNames map[string]string, groupIDs []string, beat map[string]map[string]bool, resolved map[string][]string, numBrackets int) *tierPicker {
+	return &tierPicker{
+		standings:   standings,
+		groupNames:  groupNames,
+		groupIDs:    groupIDs,
+		beat:        beat,
+		resolved:    resolved,
+		taken:       map[string]int{},
+		manual:      map[string]map[string]bool{},
+		numBrackets: numBrackets,
+	}
+}
+
+// below is the bracket that players missing this cut fall to, or 0 when this is
+// the lowest bracket and missing out means not progressing at all.
+func (p *tierPicker) below(bracket int) int {
+	if bracket < p.numBrackets {
+		return bracket + 1
+	}
+	return 0
+}
+
+func (p *tierPicker) pick(target, bracket int) []qualifier {
+	base := target / len(p.groupIDs)
+	rem := target % len(p.groupIDs)
 
 	var picks []qualifier
 	take := func(gid string) {
-		s := standings[gid][taken[gid]]
+		s := p.standings[gid][p.taken[gid]]
 		picks = append(picks, qualifier{s.ID, gid, s.Points, s.Won})
-		taken[gid]++
+		p.taken[gid]++
 	}
 
-	// The guaranteed slice from every group.
-	for _, gid := range groupIDs {
-		for i := 0; i < base && taken[gid] < len(standings[gid]); i++ {
+	// The guaranteed slice from every group. Whoever just misses the cut becomes
+	// their group's candidate for the runners-up pool, so when there are leftover
+	// places to fill they are still in the running for this bracket.
+	for _, gid := range p.groupIDs {
+		start := p.taken[gid]
+		p.checkGroupCut(gid, start, start+base, bracket, rem > 0)
+		for i := 0; i < base && p.taken[gid] < len(p.standings[gid]); i++ {
 			take(gid)
 		}
 	}
 
 	// The best of each group's next-place finishers fill the leftover slots.
 	if rem > 0 {
-		pool := make([]string, 0, len(groupIDs))
-		for _, gid := range groupIDs {
-			if taken[gid] < len(standings[gid]) {
+		pool := make([]string, 0, len(p.groupIDs))
+		for _, gid := range p.groupIDs {
+			if p.taken[gid] < len(p.standings[gid]) {
 				pool = append(pool, gid)
 			}
 		}
 		sort.SliceStable(pool, func(i, j int) bool {
-			a, b := standings[pool[i]][taken[pool[i]]], standings[pool[j]][taken[pool[j]]]
-			if a.Points != b.Points {
-				return a.Points > b.Points
-			}
-			return a.Won > b.Won
+			return rankAbove(p.next(pool[i]), p.next(pool[j]), p.beat)
 		})
+		p.checkPoolCut(pool, rem, bracket)
 		for i := 0; i < rem && i < len(pool); i++ {
 			take(pool[i])
 		}
@@ -1273,11 +1416,181 @@ func pickTier(standings map[string][]CompetitorStanding, groupIDs []string, take
 	return picks
 }
 
-// handleAdvance closes the group stage and seeds the knockout. It takes no
-// request parameters: how many advance and whether to split into two brackets
-// come from the persisted settings.
+// next is the group's best finisher not yet taken — its candidate for the
+// runners-up pool.
+func (p *tierPicker) next(gid string) CompetitorStanding {
+	return p.standings[gid][p.taken[gid]]
+}
+
+// checkGroupCut examines the boundary at index cut in one group's standings:
+// players before it take a place in this bracket, players after it do not. If
+// the players either side are level on points and head-to-head cannot separate
+// them, the cut is arbitrary — apply the organiser's ordering if they have
+// given one, otherwise record the tie for them to settle.
+func (p *tierPicker) checkGroupCut(gid string, start, cut, bracket int, hasPool bool) {
+	list := p.standings[gid]
+	if cut <= start || cut >= len(list) || list[cut-1].Points != list[cut].Points {
+		return
+	}
+	pts := list[cut].Points
+	lo, hi := cut-1, cut+1
+	for lo > start && list[lo-1].Points == pts {
+		lo--
+	}
+	for hi < len(list) && list[hi].Points == pts {
+		hi++
+	}
+
+	block := list[lo:hi]
+	if cutForced(block, cut-lo, p.beat) {
+		return
+	}
+
+	id := fmt.Sprintf("group:%s:%d", gid, lo)
+	if p.applyOrder(block, p.resolved[id]) {
+		return
+	}
+	tie := TieBreak{
+		ID:          id,
+		Scope:       "group",
+		GroupName:   p.groupNames[gid],
+		Bracket:     bracket,
+		Place:       lo + 1,
+		Slots:       cut - lo,
+		Points:      pts,
+		DropsToPool: hasPool,
+		Competitors: p.candidates(block, gid),
+	}
+	if !hasPool {
+		tie.DropsToBracket = p.below(bracket)
+	}
+	p.ties = append(p.ties, tie)
+}
+
+// checkPoolCut examines the cut in the runners-up pool, where the leftover
+// places go to the best of the groups' next-place finishers. Those candidates
+// each come from a different group, so they have never played each other and
+// being level on points always needs the organiser to decide.
+func (p *tierPicker) checkPoolCut(pool []string, rem, bracket int) {
+	if rem >= len(pool) || p.next(pool[rem-1]).Points != p.next(pool[rem]).Points {
+		return
+	}
+	pts := p.next(pool[rem]).Points
+	lo, hi := rem-1, rem+1
+	for lo > 0 && p.next(pool[lo-1]).Points == pts {
+		lo--
+	}
+	for hi < len(pool) && p.next(pool[hi]).Points == pts {
+		hi++
+	}
+
+	block := pool[lo:hi]
+	standings := make([]CompetitorStanding, len(block))
+	for i, gid := range block {
+		standings[i] = p.next(gid)
+	}
+	// These candidates come from different groups so have never met, but wins
+	// can still separate them.
+	if cutForced(standings, rem-lo, p.beat) {
+		return
+	}
+
+	id := fmt.Sprintf("pool:%d", bracket)
+	if order, ok := p.resolved[id]; ok && p.applyOrder(standings, order) {
+		// Re-order the pool itself to match the standings we just sorted.
+		byID := make(map[string]string, len(block))
+		for _, gid := range block {
+			byID[p.next(gid).ID] = gid
+		}
+		for i, st := range standings {
+			block[i] = byID[st.ID]
+		}
+		return
+	}
+
+	candidates := make([]TieCandidate, len(block))
+	for i, gid := range block {
+		candidates[i] = p.candidate(p.next(gid), gid)
+	}
+	p.ties = append(p.ties, TieBreak{
+		ID:             id,
+		Scope:          "pool",
+		Bracket:        bracket,
+		Place:          lo + 1,
+		Slots:          rem - lo,
+		Points:         pts,
+		DropsToBracket: p.below(bracket),
+		Competitors:    candidates,
+	})
+}
+
+// applyOrder re-orders a tied block to the sequence the organiser chose and
+// records that precedence for seeding. It reports false — leaving the block
+// untouched — unless the given order is exactly the players in the block, so a
+// stale answer from an earlier round of questions is ignored rather than
+// half-applied.
+func (p *tierPicker) applyOrder(block []CompetitorStanding, order []string) bool {
+	if len(order) != len(block) {
+		return false
+	}
+	rank := make(map[string]int, len(order))
+	for i, id := range order {
+		rank[id] = i
+	}
+	for _, st := range block {
+		if _, ok := rank[st.ID]; !ok {
+			return false
+		}
+	}
+	sort.SliceStable(block, func(i, j int) bool { return rank[block[i].ID] < rank[block[j].ID] })
+	for i, a := range order {
+		for _, b := range order[i+1:] {
+			if p.manual[a] == nil {
+				p.manual[a] = map[string]bool{}
+			}
+			p.manual[a][b] = true
+		}
+	}
+	return true
+}
+
+func (p *tierPicker) candidate(st CompetitorStanding, gid string) TieCandidate {
+	return TieCandidate{
+		ID:        st.ID,
+		Name:      st.Name,
+		GroupName: p.groupNames[gid],
+		Played:    st.Played,
+		Won:       st.Won,
+		Points:    st.Points,
+	}
+}
+
+func (p *tierPicker) candidates(block []CompetitorStanding, gid string) []TieCandidate {
+	out := make([]TieCandidate, len(block))
+	for i, st := range block {
+		out[i] = p.candidate(st, gid)
+	}
+	return out
+}
+
+// handleAdvance closes the group stage and seeds the knockout. How many advance
+// and whether to split into two brackets come from the persisted settings; the
+// only accepted body is `tie_breaks`, a tie ID mapped to the finishing order the
+// organiser chose for the players caught in it.
+//
+// When a tie decides who progresses and the ranking rules cannot settle it, no
+// bracket is created: the handler replies 409 with the ties to put to the
+// organiser, and the request is repeated once they have answered.
 func (s *Server) handleAdvance(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
+
+	var body struct {
+		TieBreaks map[string][]string `json:"tie_breaks"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil && err != io.EOF {
+		writeError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
 
 	var tournamentID string
 	if err := s.db.QueryRowContext(ctx, `
@@ -1288,21 +1601,23 @@ func (s *Server) handleAdvance(w http.ResponseWriter, r *http.Request) {
 	}
 
 	groupRows, err := s.db.QueryContext(ctx, `
-		SELECT id FROM groups WHERE tournament_id = ? ORDER BY name
+		SELECT id, name FROM groups WHERE tournament_id = ? ORDER BY name
 	`, tournamentID)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "query failed")
 		return
 	}
 	var groupIDs []string
+	groupNames := map[string]string{}
 	for groupRows.Next() {
-		var gid string
-		if err := groupRows.Scan(&gid); err != nil {
+		var gid, gname string
+		if err := groupRows.Scan(&gid, &gname); err != nil {
 			groupRows.Close()
 			writeError(w, http.StatusInternalServerError, "scan failed")
 			return
 		}
 		groupIDs = append(groupIDs, gid)
+		groupNames[gid] = gname
 	}
 	groupRows.Close()
 
@@ -1329,10 +1644,27 @@ func (s *Server) handleAdvance(w http.ResponseWriter, r *http.Request) {
 		}
 		standings[gid] = list
 	}
-	taken := map[string]int{}
+	beat, err := s.headToHead(ctx, tournamentID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "head-to-head failed")
+		return
+	}
+
+	picker := newTierPicker(standings, groupNames, groupIDs, beat, body.TieBreaks, numBrackets)
 	brackets := make([][]qualifier, numBrackets)
 	for bi := range brackets {
-		brackets[bi] = pickTier(standings, groupIDs, taken, st.AdvanceTotal)
+		brackets[bi] = picker.pick(st.AdvanceTotal, bi+1)
+	}
+
+	// Nothing has been written yet, so an unsettled tie can simply stop here.
+	// Answering one tie can shift the cut and expose another, so the organiser
+	// may be asked again on the repeat request.
+	if len(picker.ties) > 0 {
+		writeJSON(w, http.StatusConflict, map[string]any{
+			"error": "a tie decides who progresses and needs to be settled",
+			"ties":  picker.ties,
+		})
+		return
 	}
 
 	for bi, quals := range brackets {
@@ -1340,16 +1672,22 @@ func (s *Server) handleAdvance(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusBadRequest, fmt.Sprintf("not enough qualifiers to form bracket %d", bi+1))
 			return
 		}
-		if err := s.createKnockoutBracket(ctx, tournamentID, bi+1, quals); err != nil {
-			writeError(w, http.StatusInternalServerError, "create bracket failed")
-			return
-		}
 	}
 
-	if _, err := s.db.ExecContext(ctx, `
-		UPDATE tournaments SET status = 'knockout' WHERE id = ?
-	`, tournamentID); err != nil {
-		writeError(w, http.StatusInternalServerError, "update status failed")
+	// All brackets and the status flip land together, so a failure part-way
+	// can't leave a half-seeded knockout on a tournament still in group stage.
+	if err := s.withTx(ctx, func(tx *sql.Tx) error {
+		for bi, quals := range brackets {
+			if err := createKnockoutBracket(ctx, tx, tournamentID, bi+1, quals, beat, picker.manual); err != nil {
+				return err
+			}
+		}
+		_, err := tx.ExecContext(ctx, `
+			UPDATE tournaments SET status = 'knockout' WHERE id = ?
+		`, tournamentID)
+		return err
+	}); err != nil {
+		writeError(w, http.StatusInternalServerError, "create bracket failed")
 		return
 	}
 

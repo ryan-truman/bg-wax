@@ -72,7 +72,7 @@ func openBrowser(url string) {
 		// Try chromium/chrome in app mode for the standalone PWA window.
 		// Fall back to xdg-open if neither is installed.
 		for _, bin := range []string{"chromium", "chromium-browser", "google-chrome", "google-chrome-stable"} {
-			if exec.Command("which", bin).Run() == nil {
+			if _, err := exec.LookPath(bin); err == nil {
 				exec.Command(bin, appURL).Start()
 				return
 			}

@@ -6,6 +6,8 @@ import HomePage from './pages/HomePage'
 import MatchHistoryPage from './pages/MatchHistoryPage'
 import CompetitorsPage from './pages/CompetitorsPage'
 import SettingsPage from './pages/SettingsPage'
+import DisplayPage from './pages/DisplayPage'
+import PopOutButton from './components/PopOutButton'
 
 export default function App() {
   const [tournament, setTournament] = useState<Tournament | null>(null)
@@ -26,6 +28,11 @@ export default function App() {
     return () => clearInterval(timer)
   }, [])
 
+  // The popped-out display is the same app on a bare route: it reuses the
+  // tournament poll above but drops the header, tabs and every control, so a
+  // shared screen shows nothing anyone could click by mistake.
+  if (pathname === '/display') return <DisplayPage tournament={tournament} />
+
   const onSettings = pathname === '/settings'
 
   return (
@@ -44,7 +51,8 @@ export default function App() {
             </div>
           </Link>
 
-          <div className="flex items-center gap-4">
+          <div className="flex items-center gap-2">
+            <PopOutButton />
             <Link
               to={onSettings ? '/' : '/settings'}
               className="text-xs font-bold uppercase tracking-widest px-3 py-1.5 rounded border transition-colors"

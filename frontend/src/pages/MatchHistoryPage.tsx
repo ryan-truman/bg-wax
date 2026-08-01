@@ -1,9 +1,10 @@
 import { useState, useEffect } from 'react'
-import { api } from '../api'
-import type { Match, Tournament } from '../types'
+import { api, TieBreakRequired } from '../api'
+import type { Match, Tournament, TieBreak } from '../types'
 import { roundLabel, bracketLabel } from '../components/BracketView'
 import DrawControl from '../components/DrawControl'
 import ConfirmDialog from '../components/ConfirmDialog'
+import TieBreakDialog from '../components/TieBreakDialog'
 
 interface Props {
   tournament: Tournament | null
@@ -18,6 +19,8 @@ export default function MatchHistoryPage({ tournament, onUpdate }: Props) {
   // Set to the number of unfinished group games while the confirmation
   // dialog is open; null when it isn't.
   const [confirmAdvance, setConfirmAdvance] = useState<number | null>(null)
+  // Ties the server needs settled before it will seed the knockout.
+  const [ties, setTies] = useState<TieBreak[] | null>(null)
 
   useEffect(() => {
     let active = true
@@ -94,14 +97,21 @@ export default function MatchHistoryPage({ tournament, onUpdate }: Props) {
     else handleAdvance()
   }
 
-  async function handleAdvance() {
+  // Advancing uses the persisted settings. If a tie decides who progresses and
+  // the ranking rules can't settle it, the server refuses and returns the tied
+  // players — the dialog collects an answer and calls this again with it.
+  // Settling one tie can shift the cut and expose another, so this may go round
+  // more than once.
+  async function handleAdvance(tieBreaks?: Record<string, string[]>) {
     setAdvancing(true)
     setAdvanceError(null)
     try {
-      await api.advance() // uses the persisted settings
+      await api.advance(tieBreaks)
+      setTies(null)
       await refresh()
     } catch (e) {
-      setAdvanceError(e instanceof Error ? e.message : 'Advance failed')
+      if (e instanceof TieBreakRequired) setTies(e.ties)
+      else setAdvanceError(e instanceof Error ? e.message : 'Advance failed')
     } finally {
       setAdvancing(false)
     }
@@ -152,6 +162,13 @@ export default function MatchHistoryPage({ tournament, onUpdate }: Props) {
           confirmLabel="Advance"
           onCancel={() => setConfirmAdvance(null)}
           onConfirm={() => { setConfirmAdvance(null); handleAdvance() }}
+        />
+      )}
+      {ties && (
+        <TieBreakDialog
+          ties={ties}
+          onCancel={() => setTies(null)}
+          onResolve={answer => handleAdvance(answer)}
         />
       )}
       {brackets.map(b => {
