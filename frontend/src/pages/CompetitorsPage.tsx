@@ -1,10 +1,22 @@
 import { useState, useEffect } from 'react'
 import { api } from '../api'
-import type { Competitor, RemovedCompetitor } from '../types'
+import type { Competitor, Group, RemovedCompetitor, Tournament } from '../types'
 import ConfirmDialog from '../components/ConfirmDialog'
+import MoveGroupDialog from '../components/MoveGroupDialog'
 
-export default function CompetitorsPage() {
+interface Props {
+  tournament: Tournament | null
+}
+
+// groupLabel shortens "Group A" to "A" for the table column, where the heading
+// already says Group.
+function groupLabel(name: string): string {
+  return name.replace(/^Group /, '')
+}
+
+export default function CompetitorsPage({ tournament }: Props) {
   const [competitors, setCompetitors] = useState<Competitor[]>([])
+  const [groups, setGroups] = useState<Group[]>([])
   const [removed, setRemoved] = useState<RemovedCompetitor[]>([])
   const [loading, setLoading] = useState(true)
   const [removing, setRemoving] = useState<string | null>(null)
@@ -12,13 +24,48 @@ export default function CompetitorsPage() {
   const [confirm, setConfirm] = useState<{ id: string; name: string } | null>(null)
   const [editing, setEditing] = useState<{ id: string; name: string } | null>(null)
   const [renaming, setRenaming] = useState(false)
+  const [moveTarget, setMoveTarget] = useState<Competitor | null>(null)
+  const [moving, setMoving] = useState(false)
 
   useEffect(() => {
-    Promise.all([api.getCompetitors(), api.getRemovedCompetitors()])
-      .then(([active, gone]) => { setCompetitors(active); setRemoved(gone) })
+    // A missing draw is not an error here — the group column simply stays
+    // empty — so the groups request must not sink the whole page.
+    Promise.all([api.getCompetitors(), api.getRemovedCompetitors(), api.getGroups().catch(() => [])])
+      .then(([active, gone, drawn]) => { setCompetitors(active); setRemoved(gone); setGroups(drawn) })
       .catch(() => {})
       .finally(() => setLoading(false))
   }, [])
+
+  // Groups can only be reshuffled while the group stage is running: before the
+  // draw there is nothing to move between, and once the knockout starts the
+  // group results are history.
+  const canMove = tournament?.status === 'group_stage' && groups.length > 1
+  const groupOf = (c: Competitor) => groups.find(g => g.id === c.group_id) ?? null
+
+  // The roster reads by group: A's players, then B's, and anyone the draw has
+  // not placed at the end. The server already lists groups in draw order and
+  // competitors by name, and sorting is stable, so ordering by the group's
+  // position keeps the names alphabetical within each group.
+  const groupOrder = new Map(groups.map((g, i) => [g.id, i]))
+  const positionOf = (c: Competitor) =>
+    c.group_id !== null && groupOrder.has(c.group_id) ? groupOrder.get(c.group_id)! : groups.length
+  const roster = [...competitors].sort((a, b) => positionOf(a) - positionOf(b))
+
+  async function handleMove(groupID: string) {
+    if (!moveTarget) return
+    setMoving(true)
+    try {
+      await api.moveCompetitor(moveTarget.id, groupID)
+      const [active, drawn] = await Promise.all([api.getCompetitors(), api.getGroups()])
+      setCompetitors(active)
+      setGroups(drawn)
+      setMoveTarget(null)
+    } catch (e) {
+      alert(e instanceof Error ? e.message : 'Failed to move player.')
+    } finally {
+      setMoving(false)
+    }
+  }
 
   async function handleConfirmRemove() {
     if (!confirm) return
@@ -81,17 +128,49 @@ export default function CompetitorsPage() {
           onConfirm={handleConfirmRemove}
         />
       )}
+      {moveTarget && (
+        <MoveGroupDialog
+          playerName={moveTarget.name}
+          currentGroup={groupOf(moveTarget)}
+          groups={groups}
+          played={moveTarget.wins + moveTarget.losses}
+          busy={moving}
+          onMove={handleMove}
+          onCancel={() => setMoveTarget(null)}
+        />
+      )}
       <h2 className="text-xs uppercase tracking-widest mb-4" style={{ color: '#777' }}>
         Competitors — {competitors.length} registered
       </h2>
       <div className="rounded border divide-y" style={{ borderColor: 'var(--color-border)', backgroundColor: 'var(--color-surface-card)' }}>
+        {competitors.length > 0 && (
+          <div className="flex items-center gap-4 px-4 py-2 text-xs uppercase tracking-widest" style={{ color: '#555' }}>
+            <span className="w-6 shrink-0" aria-hidden />
+            <span className="flex-1">Player</span>
+            <span className="w-8 text-center shrink-0">Group</span>
+            <span className="w-12 text-right shrink-0">Pts</span>
+            <span className="w-8 text-right shrink-0">W</span>
+            <span className="w-8 text-right shrink-0">L</span>
+            {canMove && <span className="w-6 shrink-0" aria-hidden />}
+            <span className="w-6 shrink-0" aria-hidden />
+            <span className="w-6 shrink-0" aria-hidden />
+          </div>
+        )}
         {competitors.length === 0 ? (
           <p className="px-4 py-6 text-sm text-center" style={{ color: '#888' }}>
             No competitors yet — import from Ticket Tailor in Settings.
           </p>
         ) : (
-          competitors.map((c, i) => (
-            <div key={c.id} className="flex items-center gap-4 px-4 py-2.5">
+          roster.map((c, i) => (
+            <div
+              key={c.id}
+              className="flex items-center gap-4 px-4 py-2.5"
+              // A heavier rule where one group's block ends and the next
+              // begins, so the blocks read apart at a glance.
+              style={i > 0 && c.group_id !== roster[i - 1].group_id
+                ? { borderTop: '2px solid var(--color-border)' }
+                : undefined}
+            >
               <span className="text-xs tabular-nums w-6 text-right shrink-0" style={{ color: '#555' }}>
                 {i + 1}
               </span>
@@ -112,9 +191,27 @@ export default function CompetitorsPage() {
               ) : (
                 <span className="text-sm flex-1">{c.name}</span>
               )}
-              <span className="text-xs tabular-nums shrink-0" style={{ color: 'var(--color-brand)' }}>{c.wins}W</span>
-              <span className="text-xs tabular-nums shrink-0" style={{ color: '#888' }}>{c.losses}L</span>
-              <span className="text-xs tabular-nums shrink-0 font-semibold" style={{ color: '#f0f0f0' }}>{c.points}pts</span>
+              <span
+                className="text-xs w-8 text-center shrink-0 font-bold"
+                title={groupOf(c)?.name ?? 'Not in a group — the draw has not placed them'}
+                style={{ color: groupOf(c) ? 'var(--color-brand-bright)' : '#555' }}
+              >
+                {groupOf(c) ? groupLabel(groupOf(c)!.name) : '—'}
+              </span>
+              <span className="text-xs tabular-nums w-12 text-right shrink-0 font-semibold" style={{ color: '#f0f0f0' }}>{c.points}pts</span>
+              <span className="text-xs tabular-nums w-8 text-right shrink-0" style={{ color: 'var(--color-brand)' }}>{c.wins}W</span>
+              <span className="text-xs tabular-nums w-8 text-right shrink-0" style={{ color: '#888' }}>{c.losses}L</span>
+              {canMove && (
+                <button
+                  onClick={() => setMoveTarget(c)}
+                  disabled={moving}
+                  title={`Move ${c.name} to another group`}
+                  className="text-xs w-6 h-6 flex items-center justify-center rounded border transition-colors disabled:opacity-40"
+                  style={{ color: '#888', borderColor: 'var(--color-border)' }}
+                >
+                  ⇄
+                </button>
+              )}
               <button
                 onClick={() => setEditing({ id: c.id, name: c.name })}
                 disabled={renaming || editing?.id === c.id}

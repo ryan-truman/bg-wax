@@ -2,8 +2,10 @@ package tickettailor
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"testing"
 )
 
@@ -26,6 +28,57 @@ func TestDisplayNames(t *testing.T) {
 		if got[i] != want[i] {
 			t.Errorf("name %d = %q, want %q", i, got[i], want[i])
 		}
+	}
+}
+
+// TestTicketsForEventPaginates: an event larger than one API page is fetched in
+// full, following the next link and asking for the tickets after the last one
+// seen. Nothing about the client caps how many attendees an event can have.
+func TestTicketsForEventPaginates(t *testing.T) {
+	const total = 250
+	var startingAfter []string
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		after := r.URL.Query().Get("starting_after")
+		startingAfter = append(startingAfter, after)
+
+		from := 0
+		if after != "" {
+			var n int
+			fmt.Sscanf(after, "t%d", &n)
+			from = n
+		}
+		to := min(from+100, total)
+
+		data := make([]IssuedTicket, 0, to-from)
+		for i := from; i < to; i++ {
+			data = append(data, IssuedTicket{ID: fmt.Sprintf("t%d", i+1), OrderID: fmt.Sprintf("o%d", i+1), FirstName: "Player", LastName: fmt.Sprintf("%d", i+1), Status: "valid"})
+		}
+		next := ""
+		if to < total {
+			next = "/issued_tickets?starting_after=" + data[len(data)-1].ID
+		}
+		json.NewEncoder(w).Encode(map[string]any{"data": data, "links": map[string]string{"next": next}})
+	}))
+	defer srv.Close()
+
+	c := New("test-key")
+	c.baseURL = srv.URL
+
+	tickets, err := c.TicketsForEvent("ev_1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(tickets) != total {
+		t.Fatalf("got %d tickets, want %d", len(tickets), total)
+	}
+	for i, tk := range tickets {
+		if want := fmt.Sprintf("t%d", i+1); tk.ID != want {
+			t.Fatalf("ticket %d has ID %q, want %q", i, tk.ID, want)
+		}
+	}
+	if want := []string{"", "t100", "t200"}; !slices.Equal(startingAfter, want) {
+		t.Errorf("starting_after per request = %v, want %v", startingAfter, want)
 	}
 }
 

@@ -73,6 +73,15 @@ export const api = {
       body: JSON.stringify({ name }),
     }),
 
+  // Moves a player into another group after the draw. Their fixtures are
+  // rebuilt against the new group, which discards any result they had already
+  // recorded — confirm with the organiser first when they have played.
+  moveCompetitor: (id: string, groupId: string) =>
+    request<void>(`/api/competitors/${id}/group`, {
+      method: 'POST',
+      body: JSON.stringify({ group_id: groupId }),
+    }),
+
   // Qualifiers per bracket and bracket layout come from the persisted settings.
   // tieBreaks maps a tie ID to the finishing order the organiser chose; it is
   // only needed after an advance threw TieBreakRequired.

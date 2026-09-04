@@ -6,7 +6,15 @@ import ConfirmDialog from '../components/ConfirmDialog'
 
 // Bracket sizes on offer, mirroring advanceTotals in internal/api/handlers.go.
 // Powers of two only, so a bracket fills exactly and nobody gets a bye.
-const ADVANCE_TOTALS = [2, 4, 8, 16]
+const ADVANCE_TOTALS = [2, 4, 8, 16, 32, 64]
+
+// MAX_GROUPS matches the server's cap on a fixed group count. It is a sanity
+// guard only: the draw is what rejects a count the entrant list can't fill.
+const MAX_GROUPS = 200
+
+// DEFAULT_FIXED_GROUPS is where the fixed-count stepper starts when the
+// organiser switches away from automatic sizing without a count of their own.
+const DEFAULT_FIXED_GROUPS = 8
 
 // stepAdvanceTotal moves one place along ADVANCE_TOTALS, so the −/+ buttons
 // step 8 → 16 rather than through sizes no bracket can be built from. An
@@ -124,6 +132,16 @@ export default function SettingsPage({ tournament, onUpdate }: Props) {
     setSettings(s => ({ ...s, ...patch }))
     api.updateSettings(patch).catch(() => {})
   }
+
+  // num_groups is the whole story: 0 means the draw sizes the groups itself,
+  // anything else is a count the organiser set. Switching to automatic sends 0,
+  // which would forget their count, so it is remembered here to be handed back
+  // if they switch again in the same sitting.
+  const fixedGroups = settings.num_groups > 0
+  const [lastFixedGroups, setLastFixedGroups] = useState(DEFAULT_FIXED_GROUPS)
+  useEffect(() => {
+    if (settings.num_groups > 0) setLastFixedGroups(settings.num_groups)
+  }, [settings.num_groups])
   const [message, setMessage] = useState<{ text: string; ok: boolean } | null>(null)
 
   function openApiModal() {
@@ -300,61 +318,86 @@ export default function SettingsPage({ tournament, onUpdate }: Props) {
       {/* Draw configuration — the Run Draw button itself lives on Match History */}
       <section className="space-y-4">
         <h2 className="text-xs uppercase tracking-widest font-bold" style={{ color: '#888' }}>Group Draw</h2>
-        <div className="flex items-center gap-2">
-          <button
-            onClick={() => changeSettings({ min_group_games: Math.max(3, settings.min_group_games - 1) })}
-            disabled={settings.min_group_games <= 3}
-            className="w-8 h-8 flex items-center justify-center rounded border text-sm font-bold transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
-            style={{ borderColor: 'var(--color-border)', color: '#f0f0f0' }}
-          >
-            −
-          </button>
-          <span className="w-8 text-center text-sm tabular-nums" style={{ color: '#f0f0f0' }}>{settings.min_group_games}</span>
-          <button
-            onClick={() => changeSettings({ min_group_games: Math.min(10, settings.min_group_games + 1) })}
-            disabled={settings.min_group_games >= 10}
-            className="w-8 h-8 flex items-center justify-center rounded border text-sm font-bold transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
-            style={{ borderColor: 'var(--color-border)', color: '#f0f0f0' }}
-          >
-            +
-          </button>
-          <span className="text-xs uppercase tracking-widest" style={{ color: '#666' }}>group games per player</span>
+
+        {/* The two sizing methods are alternatives, so only the chosen one's
+            control is on screen: a games-per-player target the draw sizes
+            groups from, or a group count set outright. */}
+        <div className="flex gap-2">
+          {([
+            { fixed: false, label: 'Automatic', hint: 'Size groups from a games-per-player target' },
+            { fixed: true, label: 'Fixed count', hint: 'Set the number of groups yourself' },
+          ] as const).map(mode => {
+            const active = fixedGroups === mode.fixed
+            return (
+              <button
+                key={mode.label}
+                onClick={() => changeSettings({ num_groups: mode.fixed ? lastFixedGroups : 0 })}
+                title={mode.hint}
+                className="flex-1 px-3 py-2 rounded border text-xs font-bold uppercase tracking-widest transition-colors"
+                style={active
+                  ? { borderColor: 'var(--color-brand)', backgroundColor: 'rgba(61,122,94,0.15)', color: '#f0f0f0' }
+                  : { borderColor: 'var(--color-border)', color: '#888' }}
+              >
+                {mode.label}
+              </button>
+            )
+          })}
         </div>
-        <p className="text-xs" style={{ color: '#888' }}>
-          A minimum: the draw makes groups of {settings.min_group_games + 1}. When the numbers don't
-          split evenly, the leftovers make some groups one player bigger — an extra game, never fewer.
-        </p>
-        {settings.num_groups === 0 ? (
-          <p className="text-xs" style={{ color: '#888' }}>
-            Group count is automatic.{' '}
-            <button onClick={() => changeSettings({ num_groups: 8 })} className="underline" style={{ color: '#aaa' }}>
-              Set a fixed count
-            </button>
-          </p>
+
+        {fixedGroups ? (
+          <>
+            <div className="flex items-center gap-2">
+              <button
+                onClick={() => changeSettings({ num_groups: Math.max(2, settings.num_groups - 1) })}
+                disabled={settings.num_groups <= 2}
+                className="w-8 h-8 flex items-center justify-center rounded border text-sm font-bold transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+                style={{ borderColor: 'var(--color-border)', color: '#f0f0f0' }}
+              >
+                −
+              </button>
+              <span className="w-8 text-center text-sm tabular-nums" style={{ color: '#f0f0f0' }}>{settings.num_groups}</span>
+              <button
+                onClick={() => changeSettings({ num_groups: Math.min(MAX_GROUPS, settings.num_groups + 1) })}
+                disabled={settings.num_groups >= MAX_GROUPS}
+                className="w-8 h-8 flex items-center justify-center rounded border text-sm font-bold transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+                style={{ borderColor: 'var(--color-border)', color: '#f0f0f0' }}
+              >
+                +
+              </button>
+              <span className="text-xs uppercase tracking-widest" style={{ color: '#666' }}>groups</span>
+            </div>
+            <p className="text-xs" style={{ color: '#888' }}>
+              The field is split into exactly {settings.num_groups} groups, however many games that
+              gives each player. The draw refuses a count that would leave any group below four players.
+            </p>
+          </>
         ) : (
-          <div className="flex items-center gap-2">
-            <button
-              onClick={() => changeSettings({ num_groups: Math.max(2, settings.num_groups - 1) })}
-              disabled={settings.num_groups <= 2}
-              className="w-8 h-8 flex items-center justify-center rounded border text-sm font-bold transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
-              style={{ borderColor: 'var(--color-border)', color: '#f0f0f0' }}
-            >
-              −
-            </button>
-            <span className="w-8 text-center text-sm tabular-nums" style={{ color: '#f0f0f0' }}>{settings.num_groups}</span>
-            <button
-              onClick={() => changeSettings({ num_groups: Math.min(26, settings.num_groups + 1) })}
-              disabled={settings.num_groups >= 26}
-              className="w-8 h-8 flex items-center justify-center rounded border text-sm font-bold transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
-              style={{ borderColor: 'var(--color-border)', color: '#f0f0f0' }}
-            >
-              +
-            </button>
-            <span className="text-xs uppercase tracking-widest" style={{ color: '#666' }}>groups (fixed)</span>
-            <button onClick={() => changeSettings({ num_groups: 0 })} className="text-xs underline" style={{ color: '#aaa' }}>
-              Back to automatic
-            </button>
-          </div>
+          <>
+            <div className="flex items-center gap-2">
+              <button
+                onClick={() => changeSettings({ min_group_games: Math.max(3, settings.min_group_games - 1) })}
+                disabled={settings.min_group_games <= 3}
+                className="w-8 h-8 flex items-center justify-center rounded border text-sm font-bold transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+                style={{ borderColor: 'var(--color-border)', color: '#f0f0f0' }}
+              >
+                −
+              </button>
+              <span className="w-8 text-center text-sm tabular-nums" style={{ color: '#f0f0f0' }}>{settings.min_group_games}</span>
+              <button
+                onClick={() => changeSettings({ min_group_games: Math.min(10, settings.min_group_games + 1) })}
+                disabled={settings.min_group_games >= 10}
+                className="w-8 h-8 flex items-center justify-center rounded border text-sm font-bold transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+                style={{ borderColor: 'var(--color-border)', color: '#f0f0f0' }}
+              >
+                +
+              </button>
+              <span className="text-xs uppercase tracking-widest" style={{ color: '#666' }}>group games per player</span>
+            </div>
+            <p className="text-xs" style={{ color: '#888' }}>
+              A minimum: the draw makes groups of {settings.min_group_games + 1}. When the numbers don't
+              split evenly, the leftovers make some groups one player bigger — an extra game, never fewer.
+            </p>
+          </>
         )}
       </section>
 

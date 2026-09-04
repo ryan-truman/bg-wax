@@ -30,8 +30,8 @@ func TestDemoKeyWorkflow(t *testing.T) {
 	if err := json.NewDecoder(w.Body).Decode(&events); err != nil {
 		t.Fatal(err)
 	}
-	if len(events) != 2 {
-		t.Fatalf("expected 2 demo events, got %d", len(events))
+	if len(events) != 3 {
+		t.Fatalf("expected 3 demo events, got %d", len(events))
 	}
 
 	req = httptest.NewRequest("POST", "/api/tournament/import", strings.NewReader(`{"api_key":"demo","event_id":"demo-winter-classic"}`))

@@ -42,6 +42,7 @@ func (s *Server) routes(frontend fs.FS) {
 	s.mux.HandleFunc("DELETE /api/competitors/{id}", s.handleDeleteCompetitor)
 	s.mux.HandleFunc("PATCH /api/competitors/{id}", s.handleRenameCompetitor)
 	s.mux.HandleFunc("POST /api/competitors/{id}/restore", s.handleRestoreCompetitor)
+	s.mux.HandleFunc("POST /api/competitors/{id}/group", s.handleMoveCompetitor)
 
 	s.mux.HandleFunc("GET /api/groups", s.handleListGroups)
 

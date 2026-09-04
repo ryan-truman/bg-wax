@@ -10,21 +10,21 @@ interface Props {
   collapsible?: boolean
 }
 
+// GroupStage is a read-only board of the group standings. Moving players
+// between groups lives on the Competitors page, so nobody reshuffles the draw
+// from the screen everyone is watching the scores on.
 export default function GroupStage({ collapsible = false }: Props) {
   const [groups, setGroups] = useState<Group[]>([])
   const [expanded, setExpanded] = useState(false)
 
   useEffect(() => {
     let active = true
-    const load = () =>
-      api.getGroups()
-        .then(g => { if (active) setGroups(g) })
-        .catch(() => {})
-    load()
+    const poll = () => api.getGroups().then(g => { if (active) setGroups(g) }).catch(() => {})
+    poll()
     // Group results are locked once the knockout starts, so the archived view
     // is fetched once rather than polled all evening.
     if (collapsible) return () => { active = false }
-    const timer = setInterval(load, 5000)
+    const timer = setInterval(poll, 5000)
     return () => { active = false; clearInterval(timer) }
   }, [collapsible])
 
@@ -52,7 +52,9 @@ export default function GroupStage({ collapsible = false }: Props) {
       )}
       {!collapsed && (
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
-          {groups.map(g => <GroupCard key={g.id} group={g} />)}
+          {groups.map(g => (
+            <GroupCard key={g.id} group={g} />
+          ))}
         </div>
       )}
     </section>

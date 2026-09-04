@@ -15,7 +15,7 @@ CREATE TABLE IF NOT EXISTS competitors (
     name              TEXT NOT NULL,
     email             TEXT,
     ticket_tailor_id  TEXT,
-    order_id          TEXT,  -- Ticket Tailor order; tickets bought together share one, and the draw keeps them in different groups
+    order_id          TEXT,  -- Ticket Tailor order; tickets bought together share one, and the draw spreads them across groups (kept fully apart unless the order has more tickets than there are groups)
     seed              INTEGER,
     group_id          TEXT REFERENCES groups(id),
     removed           INTEGER NOT NULL DEFAULT 0,

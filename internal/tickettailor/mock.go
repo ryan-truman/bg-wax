@@ -11,12 +11,14 @@ import (
 // credentials. `just demo` seeds from the same data.
 const DemoKey = "demo"
 
-// DemoEvents are the events the demo account pretends to have. The Summer
-// Open carries the full 40-attendee list; the Winter Classic a smaller 16,
-// so different group/advance configurations can be tried.
+// DemoEvents are the events the demo account pretends to have, at the three
+// sizes worth rehearsing: the Summer Open is a typical night at 40 attendees,
+// the Winter Classic a small one at 16, and the Grand Open the occasional
+// large one-off that takes the whole ticket list.
 var DemoEvents = []Event{
 	{ID: "demo-summer-open", Name: "Backgammon and Wax — Summer Open 2026"},
 	{ID: "demo-winter-classic", Name: "Backgammon and Wax — Winter Classic 2026"},
+	{ID: "demo-grand-open", Name: "Backgammon and Wax — Grand Open 2026"},
 }
 
 // demoOrders groups the demo tickets by purchase order: each inner slice is
@@ -24,8 +26,10 @@ var DemoEvents = []Event{
 // tickets all issued under her own name — the "bought for friends" case the
 // app must handle: import numbers the extras ("Alice Mortimer 2", "3") ready
 // for renaming, and the draw must keep tickets from one order out of the same
-// group. Ben and Carla were bought together
-// too, but named individually. 40 tickets in total.
+// group whenever there are enough groups to do it. Ben and Carla were bought together too, but named individually; Marta
+// and Tomas are a second such pair further down the list. The list runs well
+// past a typical event's 40 so the Grand Open can rehearse a large field —
+// many groups, a 32-player bracket — from the same demo data.
 var demoOrders = [][]string{
 	{"Alice Mortimer", "Alice Mortimer", "Alice Mortimer"},
 	{"Ben Okoro", "Carla Reyes"},
@@ -64,12 +68,62 @@ var demoOrders = [][]string{
 	{"Jade Okafor"},
 	{"Kenji Watanabe"},
 	{"Lucia Montoya"},
+	{"Marta Kowalski", "Tomas Novak"},
+	{"Noor Haddad"},
+	{"Oscar Lindgren"},
+	{"Priya Raman"},
+	{"Rafael Duarte"},
+	{"Sofia Almeida"},
+	{"Ursula Klein"},
+	{"Viktor Ilyin"},
+	{"Wanda Chukwu"},
+	{"Xavier Moreau"},
+	{"Yara Farouk"},
+	{"Zaid Karim"},
+	{"Amara Diallo"},
+	{"Bruno Castellanos"},
+	{"Chiara Rossi"},
+	{"Dilan Yilmaz"},
+	{"Esther Mbeki"},
+	{"Finn Gallagher"},
+	{"Greta Sandberg"},
+	{"Hugo Marchetti"},
+	{"Isla Ferguson"},
+	{"Jonas Weber"},
+	{"Keiko Tanaka"},
+	{"Liam Donnelly"},
+	{"Mira Kaplan"},
+	{"Nikhil Sharma"},
+	{"Ode Adeyinka"},
+	{"Petra Havel"},
+	{"Quentin Laurent"},
+	{"Rosa Iglesias"},
+	{"Samir Bakri"},
+	{"Thandi Zulu"},
+	{"Umar Sesay"},
+	{"Valentina Cruz"},
+	{"Wesley Adjei"},
+	{"Xiu Lin"},
+	{"Yasmin Qureshi"},
+	{"Zander Botha"},
+	{"Anika Berg"},
+	{"Bilal Mansour"},
+	{"Cassia Moreno"},
+	{"Dov Rosenberg"},
+	{"Eira Llewellyn"},
+}
+
+// demoEventSize is how many of the demo tickets each event sells. The Grand
+// Open is absent: it takes the whole list, however long that grows.
+var demoEventSize = map[string]int{
+	"demo-summer-open":    40,
+	"demo-winter-classic": 16,
 }
 
 // DemoEvent returns the demo event with the given ID along with its issued
 // tickets, mirroring what GetEvent + TicketsForEvent return for real events.
-// The Winter Classic takes the first 16 tickets, which include both
-// multi-ticket orders.
+// The smaller events take the first n tickets, which include the multi-ticket
+// orders.
 func DemoEvent(id string) (*Event, []IssuedTicket, error) {
 	var event *Event
 	for i := range DemoEvents {
@@ -82,17 +136,9 @@ func DemoEvent(id string) (*Event, []IssuedTicket, error) {
 		return nil, nil, fmt.Errorf("no demo event with id %q", id)
 	}
 
-	limit := 40
-	if event.ID == "demo-winter-classic" {
-		limit = 16
-	}
-
 	var tickets []IssuedTicket
 	for oi, order := range demoOrders {
 		for _, name := range order {
-			if len(tickets) == limit {
-				return event, tickets, nil
-			}
 			first, last, _ := strings.Cut(name, " ")
 			tickets = append(tickets, IssuedTicket{
 				ID:        fmt.Sprintf("mock-ticket-%03d", len(tickets)+1),
@@ -103,6 +149,9 @@ func DemoEvent(id string) (*Event, []IssuedTicket, error) {
 				Status:    "valid",
 			})
 		}
+	}
+	if size, ok := demoEventSize[event.ID]; ok && len(tickets) > size {
+		tickets = tickets[:size]
 	}
 	return event, tickets, nil
 }

@@ -101,7 +101,7 @@ export default function App() {
         <Routes>
           <Route path="/" element={<HomePage tournament={tournament} />} />
           <Route path="/matches" element={<MatchHistoryPage tournament={tournament} onUpdate={handleTournamentUpdate} />} />
-          <Route path="/competitors" element={<CompetitorsPage />} />
+          <Route path="/competitors" element={<CompetitorsPage tournament={tournament} />} />
           <Route path="/settings" element={<SettingsPage tournament={tournament} onUpdate={handleTournamentUpdate} />} />
         </Routes>
       </main>
