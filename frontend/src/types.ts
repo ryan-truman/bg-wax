@@ -5,9 +5,8 @@
 
 /**
  * TournamentStatus tracks where a tournament is in its lifecycle. These consts
- * are the canonical set of valid values; tygo turns them into the matching
- * TypeScript string-literal union (the const names must be prefixed with the
- * type name for tygo's enum detection to fire).
+ * are the canonical set of values; tygo renders them as a TypeScript
+ * string-literal union (names must carry the type prefix for it to detect them).
  */
 export const TournamentStatusSetup = "setup";
 export const TournamentStatusGroupStage = "group_stage";
@@ -101,30 +100,37 @@ export interface Match {
   status: MatchStatus;
 }
 /**
- * TieBreak is a tie the ranking rules cannot settle at a point where the order
- * decides who progresses, reported so the organiser can choose. Only ties that
- * change the outcome are raised: players level on points who all qualify anyway
- * are left in whatever order the standings gave them.
- * Scope is "group" for a tie inside one group's standings, or "pool" for a tie
- * between the next-place finishers of different groups competing for the last
- * few places (those players have never met, so head-to-head cannot help).
- * Place is the 1-based finishing place the tie starts at — meaningful for a
- * group tie, but only a position within the pool for a "pool" tie. Slots is how
- * many of the tied players take the remaining qualifying places.
- * DropsToPool and DropsToBracket say where the players who miss out land, so
- * the organiser can see what they are deciding: a group tie can drop them into
- * the runners-up pool for the same bracket, otherwise they fall to
- * DropsToBracket — which is 0 when there is no bracket below and missing out
- * means not progressing at all.
+ * TieBreak is a tie the ranking rules cannot settle where the order decides who
+ * progresses, reported so the organiser can choose. Only outcome-changing ties
+ * are raised: players level on points who all qualify anyway keep the order the
+ * standings gave them.
  */
 export interface TieBreak {
   id: string;
+  /**
+   * "group" for a tie within one group's standings, or "pool" for one between
+   * the next-place finishers of different groups competing for the last few
+   * places — those players have never met, so head-to-head cannot help.
+   */
   scope: string;
   group_name: string;
   bracket: number /* int */;
+  /**
+   * 1-based finishing place the tie starts at; for a "pool" tie this is only a
+   * position within the pool.
+   */
   place: number /* int */;
+  /**
+   * How many of the tied players take the remaining qualifying places.
+   */
   slots: number /* int */;
   points: number /* int */;
+  /**
+   * Where the players who miss out land, so the organiser can see what they
+   * are deciding. A group tie may drop them into the runners-up pool for the
+   * same bracket; otherwise they fall to DropsToBracket, which is 0 when there
+   * is no bracket below and missing out means not progressing at all.
+   */
   drops_to_pool: boolean;
   drops_to_bracket: number /* int */;
   competitors: TieCandidate[];
@@ -150,25 +156,32 @@ export interface TicketTailorEvent {
   name: string;
 }
 /**
- * Settings are organiser preferences persisted in the database, so they
- * survive restarts and apply wherever the buttons are pressed — the Settings
- * page configures behaviour, the Match History page carries the buttons.
- * MinGroupGames is the number of group-stage games each player must get at
- * minimum: the automatic draw sizes groups at MinGroupGames+1 players, and
- * when the numbers don't divide evenly the remainder makes some groups one
- * player bigger — an extra game, never a shortfall. NumGroups overrides the
- * automatic sizing with a fixed group count (0 = automatic). AdvanceTotal is
- * how many finishers advance into each knockout bracket in total: the top
- * places from every group qualify, and the best of the next-place finishers
- * fill any remainder (e.g. 16 from 6 groups = top 2 each + the 4 best thirds).
- * It must be a power of two (see advanceTotals) so the bracket fills exactly.
- * SingleBracket puts all qualifiers in one bracket instead of splitting into
- * Champion's and Europa leagues.
+ * Settings are organiser preferences persisted in the database, so they survive
+ * restarts and apply wherever the buttons are pressed — the Settings page
+ * configures behaviour, the Match History page carries the buttons.
  */
 export interface Settings {
+  /**
+   * Minimum group-stage games per player: the automatic draw sizes groups at
+   * MinGroupGames+1, and an uneven remainder makes some groups one player
+   * bigger — an extra game, never a shortfall.
+   */
   min_group_games: number /* int */;
+  /**
+   * Fixed group count overriding the automatic sizing (0 = automatic).
+   */
   num_groups: number /* int */;
+  /**
+   * Finishers advancing into each knockout bracket in total: the top places
+   * from every group, with the best next-place finishers filling any remainder
+   * (16 from 6 groups = top 2 each + the 4 best thirds). Must be a power of
+   * two (see advanceTotals) so the bracket fills exactly.
+   */
   advance_total: number /* int */;
+  /**
+   * Put all qualifiers in one bracket rather than splitting into Champion's
+   * and Europa leagues.
+   */
   single_bracket: boolean;
 }
 /**

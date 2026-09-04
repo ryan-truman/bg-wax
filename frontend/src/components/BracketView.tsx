@@ -56,11 +56,10 @@ type Cell =
   | { kind: 'match'; position: number; match: Match }
   | { kind: 'bye'; position: number; name: string | null }
 
-// byeCells reconstructs the byes for the entry round. A first-round match at
-// position j feeds its parent at j/2 (player1 if j is even, player2 if odd),
-// so a parent slot that holds a player but has no feeder match below it was a
-// bye. We surface those as cards in the first round rather than letting the
-// seed silently appear a round later.
+// byeCells reconstructs the entry round's byes. A first-round match at position
+// j feeds its parent at j/2 (player1 if j is even, player2 if odd), so a parent
+// slot holding a player with no feeder match below it was a bye. Surfacing those
+// as first-round cards stops the seed silently appearing a round later.
 function byeCells(matches: Match[], firstRound: number): Cell[] {
   if (firstRound < 2) return []
   const filled = new Set(matches.filter(m => m.round === firstRound).map(m => m.position))
@@ -297,12 +296,11 @@ function Die({ value, rotation }: { value: number; rotation: number }) {
 }
 
 // PointsStrip draws one edge of a board half: six long triangular points
-// stretched to fill whatever width the half has. The red player's half
-// alternates red and white points, the green player's green and white,
-// keeping the red-vs-green identity of the two sides. Proportions follow a
-// real board: each strip is ~40% of the board's height, so a point is
-// roughly 3–4× as long as its base is wide, and the fills are muted so the
-// points read as the playing surface behind the names, not the foreground.
+// stretched to the half's width, alternating red/white on the red player's side
+// and green/white on the green player's, keeping the two sides distinct.
+// Proportions follow a real board — each strip is ~40% of board height, making a
+// point 3–4× as long as its base is wide — and the fills stay muted so the
+// points read as playing surface behind the names, not foreground.
 function PointsStrip({ direction, offset, side, className }: { direction: 'down' | 'up'; offset: number; side: 'red' | 'green'; className?: string }) {
   const tinted = side === 'red' ? 'rgba(232,20,46,0.28)' : 'rgba(61,122,94,0.38)'
   const white = 'rgba(240,240,240,0.15)'

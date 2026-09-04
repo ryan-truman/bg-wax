@@ -475,21 +475,18 @@ func (s *Server) handleRenameCompetitor(w http.ResponseWriter, r *http.Request) 
 	w.WriteHeader(http.StatusNoContent)
 }
 
-// handleMoveCompetitor moves one competitor into another group after the draw
-// has run — a late arrival, a no-show leaving a group short, a group the
-// organiser wants rebalanced by hand.
+// handleMoveCompetitor moves a competitor into another group after the draw —
+// a late arrival, a no-show leaving a group short, a hand-rebalanced group.
 //
-// A group is a round robin, so the fixtures follow the player: everything they
-// had in the old group is deleted and a pending match against each member of
-// the new group takes its place. Deleting takes any result they had already
-// recorded with it — those were games in a group they are no longer in, and
-// leaving them would credit their old opponents for a game that no longer
-// exists. The caller is expected to confirm first when the player has played
+// A group is a round robin, so fixtures follow the player: their old group's
+// matches are deleted and a pending match against each new group-mate replaces
+// them. Any result they had already recorded is deleted too — those were games
+// in a group they have left, and keeping them would credit old opponents for a
+// game that no longer exists. Callers confirm first when the player has played
 // (their standings row carries the count).
 //
-// The draw's habit of starting order-mates in different groups is not
-// re-imposed here: an organiser moving one named player by hand is making a
-// deliberate choice, and refusing it would leave them stuck.
+// Order-mate separation is not re-imposed: moving one named player by hand is a
+// deliberate choice, and refusing it would leave the organiser stuck.
 func (s *Server) handleMoveCompetitor(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	id := r.PathValue("id")
@@ -813,12 +810,11 @@ func (s *Server) handleListMatches(w http.ResponseWriter, r *http.Request) {
 }
 
 // resolveKnockoutWalkovers advances any player whose knockout opponent has been
-// removed from the tournament. A removed competitor is treated as absent at
-// whatever bracket slot they occupy: the opponent wins by walkover (no score)
-// and is pushed into the next round, cascading round by round so the bracket
-// can still reach a final. Matches where the opponent isn't known yet (a TBD
-// slot awaiting a feeder result) are left alone — they resolve once that feeder
-// fills the slot and this runs again.
+// removed. The removed competitor counts as absent at whatever slot they hold:
+// the opponent wins by walkover (no score) and moves into the next round,
+// cascading so the bracket can still reach a final. Matches whose opponent is
+// still TBD are left alone — they resolve once the feeder fills the slot and
+// this runs again.
 func resolveKnockoutWalkovers(ctx context.Context, tx *sql.Tx, tournamentID string) error {
 	for {
 		var id string
@@ -994,7 +990,6 @@ func (s *Server) handleUpdateMatch(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Return the updated match with player names.
 	var m Match
 	if err := s.db.QueryRowContext(ctx, `
 		SELECT
@@ -1030,11 +1025,10 @@ func groupName(i int) string {
 	return "Group " + letters
 }
 
-// handleDraw runs the group draw. It takes no request parameters: how groups
-// are sized comes entirely from the persisted settings — a fixed group count
-// if the organiser set one, otherwise automatic sizing from the minimum
-// games-per-player target (groups of target+1, spilling any remainder into
-// bigger groups — when the numbers don't divide evenly, more games beats
+// handleDraw runs the group draw. It takes no request parameters: sizing comes
+// entirely from the persisted settings — a fixed count if the organiser set one,
+// otherwise automatic sizing from the games-per-player target (groups of
+// target+1, any remainder spilling into bigger groups, since more games beats
 // fewer).
 func (s *Server) handleDraw(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
@@ -1134,10 +1128,9 @@ func (s *Server) handleDraw(w http.ResponseWriter, r *http.Request) {
 		}
 		// A multi-ticket order needs at least as many groups as it has tickets
 		// to be kept apart, which is worth extra groups — but never groups
-		// below the four-player minimum. An order bigger than that is a block
-		// booking (a company, a venue buying a batch for invited players)
-		// rather than a few friends, and no group count can separate it, so
-		// the games-per-player target keeps the sizing instead.
+		// below the four-player minimum. A bigger order is a block booking (a
+		// company, a venue buying for invited players) that no group count can
+		// separate, so the games-per-player target keeps the sizing instead.
 		if maxCluster > numGroups && maxCluster <= total/4 {
 			numGroups = maxCluster
 		}
@@ -1150,12 +1143,11 @@ func (s *Server) handleDraw(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Shuffle the cluster order and each cluster's members, then flatten with
-	// order-mates kept consecutive and deal round-robin across the groups.
-	// Consecutive positions land in distinct groups, so an order is spread as
-	// thinly as the group count allows: never sharing a group at all while the
-	// order has no more tickets than there are groups, and evenly split beyond
-	// that. The deal keeps group sizes within one of each other, with any
-	// remainder landing in the earlier groups.
+	// order-mates consecutive and deal round-robin across the groups. Consecutive
+	// positions land in distinct groups, so an order spreads as thinly as the
+	// group count allows — never sharing a group while it has no more tickets
+	// than there are groups, evenly split beyond that. The deal keeps group sizes
+	// within one of each other, any remainder landing in the earlier groups.
 	mathrand.Shuffle(len(clusterKeys), func(i, j int) {
 		clusterKeys[i], clusterKeys[j] = clusterKeys[j], clusterKeys[i]
 	})
@@ -1219,10 +1211,9 @@ func (s *Server) handleDraw(w http.ResponseWriter, r *http.Request) {
 }
 
 // advanceTotals are the qualifier counts a knockout bracket can be built from.
-// Only powers of two are offered, so a bracket always fills exactly and no one
-// gets a bye. 8 and 16 are the usual choices; 2 and 4 cover small tournaments,
-// 32 and 64 the large ones. A total the entrant list cannot fill simply takes
-// everyone available, leaving byes in the bracket.
+// Only powers of two, so a bracket fills exactly and no one gets a bye. 8 and 16
+// are the usual choices; 2 and 4 cover small tournaments, 32 and 64 large ones.
+// A total the entrant list cannot fill takes everyone available, leaving byes.
 var advanceTotals = []int{2, 4, 8, 16, 32, 64}
 
 const defaultAdvanceTotal = 16
@@ -1288,9 +1279,8 @@ func seedBand(seedIdx int) int {
 
 // clashCost scores a bracket layout by how early same-group players meet.
 // slots[i] is a qualifier index (or -1 for a bye); consecutive pairs are
-// first-round matches, consecutive quads are round-of-4 subtrees, and so on.
-// Earlier possible meetings are weighted far more heavily than later ones, so
-// minimizing the cost pushes same-group meetings as late as possible.
+// first-round matches, consecutive quads round-of-4 subtrees, and so on. Earlier
+// meetings weigh far more, so minimizing the cost pushes them as late as possible.
 func clashCost(slots []int, quals []qualifier) int {
 	cost := 0
 	weight := 1 << 24
@@ -1456,19 +1446,18 @@ func (s *Server) headToHead(ctx context.Context, tournamentID string) (map[strin
 	return beat, rows.Err()
 }
 
-// tierPicker selects the qualifiers for each knockout bracket from the group
-// standings, and reports the ties it cannot settle on its own.
+// tierPicker selects each knockout bracket's qualifiers from the group
+// standings and reports the ties it cannot settle on its own.
 //
-// Selection works as before: a base number qualify from every group (target ÷
-// groups), then the best of the next-place finishers across the groups fill the
-// remainder (the "best runners-up" rule). `taken` records how many places each
-// group has already given to earlier brackets, so calling pick again peels off
-// the next tier down.
+// A base number qualify from every group (target ÷ groups), then the best of the
+// next-place finishers fill the remainder (the "best runners-up" rule). `taken`
+// records how many places each group has already given to earlier brackets, so
+// calling pick again peels off the next tier down.
 //
-// At each cut — the boundary between the players taken and those left behind —
+// At each cut — the boundary between players taken and those left behind —
 // players level on points that head-to-head cannot separate would be split
-// arbitrarily. Those cuts are collected in `ties` for the organiser to settle;
-// orderings they have already given arrive in `resolved`, keyed by tie ID.
+// arbitrarily. Those cuts go into `ties` for the organiser to settle; orderings
+// they have already given arrive in `resolved`, keyed by tie ID.
 type tierPicker struct {
 	standings  map[string][]CompetitorStanding
 	groupNames map[string]string
@@ -1707,12 +1696,12 @@ func (p *tierPicker) candidates(block []CompetitorStanding, gid string) []TieCan
 
 // handleAdvance closes the group stage and seeds the knockout. How many advance
 // and whether to split into two brackets come from the persisted settings; the
-// only accepted body is `tie_breaks`, a tie ID mapped to the finishing order the
-// organiser chose for the players caught in it.
+// only accepted body is `tie_breaks`, mapping a tie ID to the finishing order
+// the organiser chose.
 //
-// When a tie decides who progresses and the ranking rules cannot settle it, no
-// bracket is created: the handler replies 409 with the ties to put to the
-// organiser, and the request is repeated once they have answered.
+// When a tie decides who progresses and the rules cannot settle it, no bracket
+// is created: the handler replies 409 with the ties to put to the organiser,
+// and the request is repeated once they have answered.
 func (s *Server) handleAdvance(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 

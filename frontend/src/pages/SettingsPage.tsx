@@ -133,10 +133,9 @@ export default function SettingsPage({ tournament, onUpdate }: Props) {
     api.updateSettings(patch).catch(() => {})
   }
 
-  // num_groups is the whole story: 0 means the draw sizes the groups itself,
-  // anything else is a count the organiser set. Switching to automatic sends 0,
-  // which would forget their count, so it is remembered here to be handed back
-  // if they switch again in the same sitting.
+  // num_groups is the whole story: 0 means the draw sizes groups itself, anything
+  // else is a count the organiser set. Switching to automatic sends 0, which would
+  // forget that count, so it is remembered here for the rest of the sitting.
   const fixedGroups = settings.num_groups > 0
   const [lastFixedGroups, setLastFixedGroups] = useState(DEFAULT_FIXED_GROUPS)
   useEffect(() => {

@@ -19,7 +19,6 @@ func groupOf(t *testing.T, s *Server, name string) (string, string) {
 	return "", ""
 }
 
-// competitorID finds a competitor by name in the current tournament.
 func competitorID(t *testing.T, s *Server, name string) string {
 	t.Helper()
 	for _, c := range listCompetitors(t, s) {
@@ -67,7 +66,6 @@ func setupDrawnTournament(t *testing.T) *Server {
 func TestMoveCompetitorBetweenGroups(t *testing.T) {
 	s := setupDrawnTournament(t)
 
-	// Pick someone and a group that isn't theirs.
 	player := listCompetitors(t, s)[0]
 	fromName, _ := groupOf(t, s, player.Name)
 	var target Group

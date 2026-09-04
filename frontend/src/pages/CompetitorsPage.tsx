@@ -42,10 +42,10 @@ export default function CompetitorsPage({ tournament }: Props) {
   const canMove = tournament?.status === 'group_stage' && groups.length > 1
   const groupOf = (c: Competitor) => groups.find(g => g.id === c.group_id) ?? null
 
-  // The roster reads by group: A's players, then B's, and anyone the draw has
-  // not placed at the end. The server already lists groups in draw order and
-  // competitors by name, and sorting is stable, so ordering by the group's
-  // position keeps the names alphabetical within each group.
+  // The roster reads by group: A's players, then B's, then anyone the draw has
+  // not placed. The server lists groups in draw order and competitors by name,
+  // and the sort is stable, so ordering by group position keeps each group's
+  // names alphabetical.
   const groupOrder = new Map(groups.map((g, i) => [g.id, i]))
   const positionOf = (c: Competitor) =>
     c.group_id !== null && groupOrder.has(c.group_id) ? groupOrder.get(c.group_id)! : groups.length

@@ -1,14 +1,12 @@
 package api
 
-// This file is the single source of truth for the JSON shapes returned by the
-// API. The TypeScript definitions in frontend/src/types.ts are generated from
-// these structs by tygo (see tygo.yaml + the `types` recipe in the justfile),
-// so the json tags here must stay in sync with what the frontend expects.
+// Single source of truth for the API's JSON shapes: frontend/src/types.ts is
+// generated from these structs by tygo (see tygo.yaml and the `types` recipe),
+// so the json tags must stay in sync with what the frontend expects.
 
 // TournamentStatus tracks where a tournament is in its lifecycle. These consts
-// are the canonical set of valid values; tygo turns them into the matching
-// TypeScript string-literal union (the const names must be prefixed with the
-// type name for tygo's enum detection to fire).
+// are the canonical set of values; tygo renders them as a TypeScript
+// string-literal union (names must carry the type prefix for it to detect them).
 type TournamentStatus string
 
 const (
@@ -102,31 +100,28 @@ type Match struct {
 	Status       MatchStatus `json:"status"`
 }
 
-// TieBreak is a tie the ranking rules cannot settle at a point where the order
-// decides who progresses, reported so the organiser can choose. Only ties that
-// change the outcome are raised: players level on points who all qualify anyway
-// are left in whatever order the standings gave them.
-//
-// Scope is "group" for a tie inside one group's standings, or "pool" for a tie
-// between the next-place finishers of different groups competing for the last
-// few places (those players have never met, so head-to-head cannot help).
-// Place is the 1-based finishing place the tie starts at — meaningful for a
-// group tie, but only a position within the pool for a "pool" tie. Slots is how
-// many of the tied players take the remaining qualifying places.
-//
-// DropsToPool and DropsToBracket say where the players who miss out land, so
-// the organiser can see what they are deciding: a group tie can drop them into
-// the runners-up pool for the same bracket, otherwise they fall to
-// DropsToBracket — which is 0 when there is no bracket below and missing out
-// means not progressing at all.
+// TieBreak is a tie the ranking rules cannot settle where the order decides who
+// progresses, reported so the organiser can choose. Only outcome-changing ties
+// are raised: players level on points who all qualify anyway keep the order the
+// standings gave them.
 type TieBreak struct {
-	ID             string         `json:"id"`
-	Scope          string         `json:"scope"`
-	GroupName      string         `json:"group_name"`
-	Bracket        int            `json:"bracket"`
-	Place          int            `json:"place"`
-	Slots          int            `json:"slots"`
-	Points         int            `json:"points"`
+	ID string `json:"id"`
+	// "group" for a tie within one group's standings, or "pool" for one between
+	// the next-place finishers of different groups competing for the last few
+	// places — those players have never met, so head-to-head cannot help.
+	Scope     string `json:"scope"`
+	GroupName string `json:"group_name"`
+	Bracket   int    `json:"bracket"`
+	// 1-based finishing place the tie starts at; for a "pool" tie this is only a
+	// position within the pool.
+	Place int `json:"place"`
+	// How many of the tied players take the remaining qualifying places.
+	Slots  int `json:"slots"`
+	Points int `json:"points"`
+	// Where the players who miss out land, so the organiser can see what they
+	// are deciding. A group tie may drop them into the runners-up pool for the
+	// same bracket; otherwise they fall to DropsToBracket, which is 0 when there
+	// is no bracket below and missing out means not progressing at all.
 	DropsToPool    bool           `json:"drops_to_pool"`
 	DropsToBracket int            `json:"drops_to_bracket"`
 	Competitors    []TieCandidate `json:"competitors"`
@@ -150,25 +145,23 @@ type TicketTailorEvent struct {
 	Name string `json:"name"`
 }
 
-// Settings are organiser preferences persisted in the database, so they
-// survive restarts and apply wherever the buttons are pressed — the Settings
-// page configures behaviour, the Match History page carries the buttons.
-//
-// MinGroupGames is the number of group-stage games each player must get at
-// minimum: the automatic draw sizes groups at MinGroupGames+1 players, and
-// when the numbers don't divide evenly the remainder makes some groups one
-// player bigger — an extra game, never a shortfall. NumGroups overrides the
-// automatic sizing with a fixed group count (0 = automatic). AdvanceTotal is
-// how many finishers advance into each knockout bracket in total: the top
-// places from every group qualify, and the best of the next-place finishers
-// fill any remainder (e.g. 16 from 6 groups = top 2 each + the 4 best thirds).
-// It must be a power of two (see advanceTotals) so the bracket fills exactly.
-// SingleBracket puts all qualifiers in one bracket instead of splitting into
-// Champion's and Europa leagues.
+// Settings are organiser preferences persisted in the database, so they survive
+// restarts and apply wherever the buttons are pressed — the Settings page
+// configures behaviour, the Match History page carries the buttons.
 type Settings struct {
-	MinGroupGames int  `json:"min_group_games"`
-	NumGroups     int  `json:"num_groups"`
-	AdvanceTotal  int  `json:"advance_total"`
+	// Minimum group-stage games per player: the automatic draw sizes groups at
+	// MinGroupGames+1, and an uneven remainder makes some groups one player
+	// bigger — an extra game, never a shortfall.
+	MinGroupGames int `json:"min_group_games"`
+	// Fixed group count overriding the automatic sizing (0 = automatic).
+	NumGroups int `json:"num_groups"`
+	// Finishers advancing into each knockout bracket in total: the top places
+	// from every group, with the best next-place finishers filling any remainder
+	// (16 from 6 groups = top 2 each + the 4 best thirds). Must be a power of
+	// two (see advanceTotals) so the bracket fills exactly.
+	AdvanceTotal int `json:"advance_total"`
+	// Put all qualifiers in one bracket rather than splitting into Champion's
+	// and Europa leagues.
 	SingleBracket bool `json:"single_bracket"`
 }
 

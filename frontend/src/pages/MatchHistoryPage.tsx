@@ -98,10 +98,9 @@ export default function MatchHistoryPage({ tournament, onUpdate }: Props) {
   }
 
   // Advancing uses the persisted settings. If a tie decides who progresses and
-  // the ranking rules can't settle it, the server refuses and returns the tied
-  // players — the dialog collects an answer and calls this again with it.
-  // Settling one tie can shift the cut and expose another, so this may go round
-  // more than once.
+  // the rules can't settle it, the server refuses and returns the tied players —
+  // the dialog collects an answer and calls this again with it. Settling one tie
+  // can expose another, so this may go round more than once.
   async function handleAdvance(tieBreaks?: Record<string, string[]>) {
     setAdvancing(true)
     setAdvanceError(null)
@@ -218,12 +217,10 @@ function groupByName(matches: Match[]): [string, Match[]][] {
   return [...buckets.entries()].sort((a, b) => a[0].localeCompare(b[0]))
 }
 
-// completedSubgroups builds the subheadings for the shared Completed section in
-// reverse-chronological order — newest at the top, oldest at the bottom. The
-// knockout comes first, its most recent round leading (Final → … → Round of
-// 16), then the group stage sits underneath, still split into its group
-// sections (Group A, B, …). Rounds are prefixed with the bracket name when
-// there's more than one bracket to keep them distinct.
+// completedSubgroups builds the Completed section's subheadings newest-first:
+// the knockout leads with its most recent round (Final → … → Round of 16), then
+// the group stage underneath, still split by group (Group A, B, …). Rounds carry
+// the bracket name when there's more than one bracket, to keep them distinct.
 function completedSubgroups(group: Match[], knockout: Match[], multiBracket: boolean): [string, Match[]][] {
   const out: [string, Match[]][] = []
   const brackets = [...new Set(knockout.map(m => m.bracket ?? 1))].sort((a, b) => a - b)

@@ -25,10 +25,9 @@ function plural(n: number, word: string) {
   return `${n} ${word}${n === 1 ? '' : 's'}`
 }
 
-// What the tie is competing for. A group tie is for a real finishing place, so
-// it can be named; a pool tie is for whatever places are left over once every
-// group has sent its guaranteed qualifiers, and the position within that pool
-// is not a finishing place worth showing.
+// What the tie is competing for. A group tie is for a real finishing place, so it
+// can be named; a pool tie is for the places left over once every group has sent
+// its guaranteed qualifiers, where a position within the pool means nothing.
 function title(tie: TieBreak) {
   if (tie.scope === 'pool') return `Last ${plural(tie.slots, 'place')} — best runners-up`
   return `${tie.group_name} — ${ordinal(tie.place)} place`
