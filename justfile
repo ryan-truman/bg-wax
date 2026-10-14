@@ -34,15 +34,29 @@ types:
 # Build and package the macOS (Apple Silicon) .app bundle for distribution.
 build: types
     cd frontend && npm run build
-    rm -rf "dist/{{app}}.app" "dist/{{app}}.zip"
-    mkdir -p "dist/{{app}}.app/Contents/MacOS" "dist/{{app}}.app/Contents/Resources"
-    GOOS=darwin GOARCH=arm64 go build -o "dist/{{app}}.app/Contents/MacOS/bgwax-server" ./cmd/server
-    cp build/launcher.sh "dist/{{app}}.app/Contents/MacOS/bgwax"
-    cp build/Info.plist "dist/{{app}}.app/Contents/Info.plist"
-    cp frontend/public/logo.png "dist/{{app}}.app/Contents/Resources/icon.png"
-    chmod +x "dist/{{app}}.app/Contents/MacOS/bgwax" "dist/{{app}}.app/Contents/MacOS/bgwax-server"
-    cd dist && zip -qr "{{app}}.zip" "{{app}}.app"
-    @echo "Built dist/{{app}}.zip (Apple Silicon)"
+    @just bundle arm64 "{{app}}" "Apple Silicon"
+
+# Same, for Intel Macs — produces dist/bg-wax-intel.zip.
+build-intel: types
+    cd frontend && npm run build
+    @just bundle amd64 "{{app}}-intel" "Intel"
+
+# Assemble the .app bundle for one architecture under dist/<arch>/ and zip it to
+# dist/<out>.zip, so the two builds can sit side by side.
+[private]
+bundle arch out label:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    stage="dist/{{arch}}"
+    rm -rf "$stage" "dist/{{out}}.zip"
+    mkdir -p "$stage/{{app}}.app/Contents/MacOS" "$stage/{{app}}.app/Contents/Resources"
+    GOOS=darwin GOARCH={{arch}} go build -o "$stage/{{app}}.app/Contents/MacOS/bgwax-server" ./cmd/server
+    cp build/launcher.sh "$stage/{{app}}.app/Contents/MacOS/bgwax"
+    cp build/Info.plist "$stage/{{app}}.app/Contents/Info.plist"
+    cp frontend/public/logo.png "$stage/{{app}}.app/Contents/Resources/icon.png"
+    chmod +x "$stage/{{app}}.app/Contents/MacOS/bgwax" "$stage/{{app}}.app/Contents/MacOS/bgwax-server"
+    (cd "$stage" && zip -qr "../{{out}}.zip" "{{app}}.app")
+    echo "Built dist/{{out}}.zip ({{label}})"
 
 # Install frontend dependencies (once after cloning)
 setup:
